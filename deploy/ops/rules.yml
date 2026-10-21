@@ -40,3 +40,12 @@ groups:
         for: 15m
         annotations:
           summary: 최근 24시간 분석 성공률이 95% 아래다
+
+  # 경보 길 자체의 생존 신호 (Watchdog). 늘 울리고, Alertmanager가 Better Stack 하트비트로만 보낸다.
+  # 이 신호가 끊기면 Prometheus 규칙 검사 · Alertmanager 보내기 · 운영 VM 중 하나가 멈춘 것이다
+  - name: meta
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        annotations:
+          summary: 경보 길이 살아 있다 (늘 울린다)

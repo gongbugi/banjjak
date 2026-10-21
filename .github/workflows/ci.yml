@@ -37,13 +37,14 @@ jobs:
           promtool test rules ops/rules_test.yml
           promtool check config ops/prometheus.yml
           promtool check config --agent agent/agent.yml
-      # 알림 길: 설정 문법 + 어떤 규칙이 울려도 Slack과 운영 AI 두 곳으로 가는지
+      # 알림 길: 설정 문법 + 규칙은 Slack과 운영 AI 두 곳으로, Watchdog은 하트비트로만 가는지
       - run: |
           amtool() { docker run --rm -v "$PWD/deploy:/d" -w /d --entrypoint amtool prom/alertmanager:v0.34.1 "$@"; }
           amtool check-config ops/alertmanager.yml
-          for a in $(sed -n 's/^ *- alert: //p' deploy/ops/rules.yml); do
+          for a in $(sed -n 's/^ *- alert: //p' deploy/ops/rules.yml | grep -vx Watchdog); do
             amtool config routes test --config.file=ops/alertmanager.yml --verify.receivers=slack,ops-ai alertname=$a
           done
+          amtool config routes test --config.file=ops/alertmanager.yml --verify.receivers=watchdog alertname=Watchdog
 
   image:
     needs: [test, rules]

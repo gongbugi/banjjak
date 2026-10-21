@@ -88,3 +88,12 @@ tests:
         alertname: AnalysisSuccessLow
         exp_alerts:
           - exp_annotations: {summary: 최근 24시간 분석 성공률이 95% 아래다}
+
+  # Watchdog은 아무 지표가 없어도 늘 울린다
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_annotations: {summary: 경보 길이 살아 있다 (늘 울린다)}
