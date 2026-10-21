@@ -36,6 +36,7 @@
     .ranking { margin: 3rem 0 0; }
     .ranking ol { list-style: none; margin: 0; padding: 0; }
     .repo { display: grid; grid-template-columns: 2rem 2rem 1fr; column-gap: .4rem; padding: 1.3rem 0; }
+    .repo > div { min-width: 0; }   /* 긴 설치 명령이 칸을 넓혀 화면 밖으로 밀지 않게: 코드 블록 안에서만 스크롤 */
     .rank { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; padding-top: .05rem; }
     .spark { display: flex; justify-content: center; padding-top: .3rem; }
     .spark svg { fill: var(--star); width: calc(1.6rem * var(--glow)); height: calc(1.6rem * var(--glow));
@@ -63,7 +64,7 @@
     .missing { color: var(--muted); }
     .quote { margin: 0 0 .4rem; padding-left: .7rem; border-left: 2px solid var(--star); overflow-wrap: anywhere; }
     .quote span { display: block; color: var(--muted); font-size: .82rem; }
-    .related a { margin-right: .9rem; }
+    .related a { margin-right: .9rem; overflow-wrap: anywhere; }
 
     footer { margin: 3rem 0 0; color: var(--muted); font-size: .88rem; max-width: 38rem; }
     @media (max-width: 520px) {
