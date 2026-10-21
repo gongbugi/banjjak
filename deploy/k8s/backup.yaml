@@ -53,7 +53,11 @@ spec:
                   curl --fail -sS -X PUT -H "x-ms-blob-type: BlockBlob" \
                     --data-binary "@/dump/$name" "$CONTAINER_URL/$name?$SAS"
                   echo "uploaded $name"
+                  # 성공했을 때만 하트비트. 실패하면 신호가 끊겨 밖(Better Stack)에서 안다
+                  if [ -n "$PING_URL" ]; then curl --fail -sS -m 10 "$PING_URL" >/dev/null && echo "heartbeat sent"; fi
               env:
+                - name: PING_URL
+                  valueFrom: {secretKeyRef: {name: backup-ping, key: url, optional: true}}
                 - name: CONTAINER_URL
                   valueFrom: {secretKeyRef: {name: backup-blob, key: container_url, optional: true}}
                 - name: SAS
