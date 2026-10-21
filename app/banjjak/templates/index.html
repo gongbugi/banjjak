@@ -123,7 +123,7 @@
             <dd>{% if r.card.usage %}<pre><code>{{ r.card.usage }}</code></pre>{% else %}<span class="missing">README에 없음</span>{% endif %}</dd>
             {% if r.card.notes %}
             <dt>알아둘 점</dt>
-            <dd>{% for n in r.card.notes %}<p class="quote"><span>{{ n.name }}</span>{{ n.quote }}</p>{% endfor %}</dd>
+            <dd>{% for n in r.card.notes %}<p class="quote"><span>{{ n.name }}</span>{{ n.quote | plain }}</p>{% endfor %}</dd>
             {% endif %}
             {% if r.related %}
             <dt>같은 분야</dt>

@@ -31,7 +31,8 @@ def _item(id, name, topics, stars):
 
 def _seed_and_analyze():
     items = [_item(1, "a/rocket", ["cli"], 400), _item(2, "b/drill", ["cli"], 300), _item(3, "c/paint", ["svg"], 200)]
-    readmes = {"a/rocket": {"sha": "s1", "content": ROCKET}, "b/drill": {"sha": "s2", "content": "# drill\nwords\n"}}
+    drill = "# drill\n\nCloud sync needs a [paid plan](https://x.dev/pricing).\n"
+    readmes = {"a/rocket": {"sha": "s1", "content": ROCKET}, "b/drill": {"sha": "s2", "content": drill}}
 
     def fetch(name):
         if name not in readmes:
@@ -61,6 +62,8 @@ def test_page_shows_card_and_missing_usage():
     assert "Rocket sends anonymous usage statistics by default." in html
     assert "README에 없음" in html                        # b/drill은 설치 방법이 없다
     assert "개발 도구" in html
+    # 인용은 원문 그대로 저장하되, 화면에서는 마크다운 링크를 글자만 보인다
+    assert "Cloud sync needs a paid plan." in html and "](https://x.dev" not in html
 
 
 def _analysis(repo_id, at, category="dev-tools", ok=True):
@@ -69,7 +72,7 @@ def _analysis(repo_id, at, category="dev-tools", ok=True):
 
 
 def test_weekly_tally_counts_new_entrants_against_last_week():
-    items = [_item(i, f"o/r{i}", [], 100) for i in range(1, 5)]
+    items = [_item(i, f"o/r{i}", [], 100) for i in range(1, 7)]
     with db.engine().begin() as conn:
         collect_once(lambda q, p: {"items": items if p == 1 else []}, conn, NOW)
         conn.execute(insert(db.analyses), [
@@ -78,8 +81,10 @@ def test_weekly_tally_counts_new_entrants_against_last_week():
             _analysis(3, NOW - timedelta(days=5)),                       # 지난주
             _analysis(4, NOW - timedelta(hours=1), ok=False),            # 실패는 분야가 없다
         ])
-        tally = {t["slug"]: (t["this_week"], t["last_week"]) for t in weekly_tally(conn, NOW)}
-    assert tally == {"dev-tools": (1, 1), "creative": (1, 0)}
+        conn.execute(insert(db.analyses), [_analysis(i, NOW - timedelta(hours=2), "unclassified") for i in (5, 6)])
+        tally = [(t["slug"], t["this_week"], t["last_week"]) for t in weekly_tally(conn, NOW)]
+    # 미분류는 분야가 아니라 맨 뒤 (가장 많아도)
+    assert tally == [("dev-tools", 1, 1), ("creative", 1, 0), ("unclassified", 2, 0)]
 
 
 def test_success_ratio_metric(monkeypatch):

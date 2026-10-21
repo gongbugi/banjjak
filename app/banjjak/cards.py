@@ -53,7 +53,9 @@ def weekly_tally(conn, now):
     for repo_id, r in latest.items():
         counts.setdefault(r["category"], [0, 0])[0 if firsts[repo_id] >= this_start else 1] += 1
     return sorted(({"slug": s, "name": CATEGORY_NAMES[s], "this_week": t, "last_week": l}
-                   for s, (t, l) in counts.items()), key=lambda x: (-x["this_week"], -x["last_week"], x["name"]))
+                   for s, (t, l) in counts.items()),
+                  # 미분류는 분야가 아니라 맨 뒤
+                  key=lambda x: (x["slug"] == "unclassified", -x["this_week"], -x["last_week"], x["name"]))
 
 
 def success_ratio(conn, now):

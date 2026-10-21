@@ -1,3 +1,4 @@
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +17,9 @@ from banjjak.trending import latest_capture, trending
 # 지표는 이 앱에 없다. banjjak.serve가 9100 포트로 따로 낸다 (공개 입구로 새지 않게)
 app = FastAPI(title="banjjak")
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+# README 인용은 원문 그대로 저장하고, 화면에서만 마크다운 링크 · 강조 · 코드 표시를 글자로 보인다
+templates.env.filters["plain"] = lambda s: _MD_LINK.sub(r"\1", s).replace("**", "").replace("`", "")
 
 # 0.5초 칸: p95 500ms 규칙이 경계에서 어림이 아니라 정확해진다
 REQUEST_SECONDS = Histogram(
