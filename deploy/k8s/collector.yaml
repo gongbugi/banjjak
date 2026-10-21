@@ -27,6 +27,8 @@ spec:
                   valueFrom: {secretKeyRef: {name: db, key: url}}
                 - name: GITHUB_TOKEN
                   valueFrom: {secretKeyRef: {name: github-token, key: token}}
+                - name: HEARTBEAT_URL      # 밖(Better Stack)에 "돌았다"를 알린다. 없으면(로컬) 안 보낸다
+                  valueFrom: {secretKeyRef: {name: heartbeats, key: collector, optional: true}}
               resources:
                 requests: {cpu: 50m, memory: 96Mi}
                 limits: {memory: 256Mi}

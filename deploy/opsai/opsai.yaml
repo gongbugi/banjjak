@@ -24,6 +24,9 @@ spec:
           image: banjjak
           imagePullPolicy: IfNotPresent     # 태그는 커밋 SHA라 바뀌지 않는다
           command: ["uvicorn", "banjjak.opsai:app", "--host", "0.0.0.0", "--port", "8080"]
+          env:
+            - name: HEARTBEAT_URL          # 밖(Better Stack)에 1분마다 "살아 있다". 없으면 안 보낸다
+              valueFrom: {secretKeyRef: {name: heartbeats, key: ops_ai, optional: true}}
           ports:
             - containerPort: 8080
           readinessProbe:

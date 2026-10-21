@@ -57,7 +57,7 @@ spec:
                   if [ -n "$PING_URL" ]; then curl --fail -sS -m 10 "$PING_URL" >/dev/null && echo "heartbeat sent"; fi
               env:
                 - name: PING_URL
-                  valueFrom: {secretKeyRef: {name: backup-ping, key: url, optional: true}}
+                  valueFrom: {secretKeyRef: {name: heartbeats, key: backup, optional: true}}
                 - name: CONTAINER_URL
                   valueFrom: {secretKeyRef: {name: backup-blob, key: container_url, optional: true}}
                 - name: SAS

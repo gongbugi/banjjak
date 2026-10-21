@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from banjjak import db
+from banjjak.heartbeat import ping
 from banjjak.trending import trending
 
 # code-v1 → code-v2 (2026-10-21): 운영 첫 분석 50개에서 본 알아둘 점 오탐(부정문 · 보안 신고 안내 ·
@@ -263,6 +264,7 @@ def main():
     with db.engine().begin() as conn:
         n, failed = analyze_once(github_readme(os.environ["GITHUB_TOKEN"]), conn, datetime.now(timezone.utc))
     print(f"analyzed {n}, failed {failed}")
+    ping(os.environ.get("HEARTBEAT_URL"))   # "돌았다"는 신호. 레포별 실패는 성공률 규칙이 본다
 
 
 if __name__ == "__main__":
