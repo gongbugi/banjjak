@@ -71,8 +71,9 @@ def freshness():
     age = _data_age()
     if age is None:
         return JSONResponse({"status": "unknown"}, status_code=503)
-    body = {"status": "fresh" if age <= FRESH_FOR else "stale", "age_seconds": int(age.total_seconds())}
-    return body if age <= FRESH_FOR else JSONResponse(body, status_code=503)
+    fresh = age <= FRESH_FOR
+    body = {"status": "fresh" if fresh else "stale", "age_seconds": int(age.total_seconds())}
+    return JSONResponse(body, status_code=200 if fresh else 503)
 
 
 def _snapshot():
