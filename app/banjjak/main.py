@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -42,7 +43,12 @@ def api_trending():
     return {"updated_at": updated_at, "items": items}
 
 
+KST = timezone(timedelta(hours=9))   # 한국은 서머타임이 없어 고정 오프셋으로 충분하다 (tzdata 불필요)
+
+
 @app.get("/")
 def index(request: Request):
     updated_at, items = _snapshot()
-    return templates.TemplateResponse(request, "index.html", {"updated_at": updated_at, "items": items})
+    basis = datetime.fromisoformat(updated_at).astimezone(KST) if updated_at else None
+    basis_text = f"{basis.year}년 {basis.month}월 {basis.day}일 {basis:%H:%M} 기준 (한국 시간)" if basis else None
+    return templates.TemplateResponse(request, "index.html", {"basis": basis_text, "items": items})

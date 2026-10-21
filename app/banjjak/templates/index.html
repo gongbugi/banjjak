@@ -13,7 +13,8 @@
 </head>
 <body>
   <h1>반짝 · 지금 뜨는 GitHub 레포</h1>
-  <p class="meta">최근 30일 안에 생긴 레포 중 별이 빨리 느는 순서 · 갱신 {{ updated_at or "아직 없음" }}</p>
+  <p class="meta">{{ basis or "아직 수집 전" }}</p>
+  <p class="meta">최근 30일 안에 생긴 레포 중 별이 빨리 느는 순서예요. 오래된 레포가 갑자기 뜨는 경우는 아직 보지 않아요.</p>
   <ol>
   {% for r in items %}
     <li>
