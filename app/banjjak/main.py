@@ -4,7 +4,8 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
-from prometheus_client import make_asgi_app
+from prometheus_client import REGISTRY, make_asgi_app
+from prometheus_client.core import GaugeMetricFamily
 from sqlalchemy import text
 
 from banjjak import db
@@ -29,6 +30,49 @@ def readyz():
     except Exception:
         return JSONResponse({"status": "db unavailable"}, status_code=503)
     return {"status": "ok"}
+
+
+FRESH_FOR = timedelta(hours=2)   # 수집은 매시간. 한 번 빠져도 버티고, 두 번 연달아 빠지면 넘는다
+
+
+def _now():
+    return datetime.now(timezone.utc)
+
+
+def _data_age():
+    """가장 최근 기록이 얼마나 묵었나. DB를 못 읽거나 기록이 없으면 None."""
+    try:
+        with db.engine().connect() as conn:
+            latest = latest_capture(conn)
+    except Exception:
+        return None
+    return None if latest is None else _now() - latest
+
+
+class _DataAge:
+    # 긁을 때마다 DB에서 잰다. 못 재면 지표를 아예 내지 않는다 (옛 값이나 0을 내면 신선해 보인다)
+    NAME, HELP = "banjjak_data_age_seconds", "now minus the latest star snapshot"
+
+    def describe(self):
+        yield GaugeMetricFamily(self.NAME, self.HELP)
+
+    def collect(self):
+        age = _data_age()
+        if age is not None:
+            yield GaugeMetricFamily(self.NAME, self.HELP, value=age.total_seconds())
+
+
+REGISTRY.register(_DataAge())
+
+
+@app.get("/freshness")
+def freshness():
+    # VM 밖(Better Stack)에서 보는 신호. 수집이 0건으로 "성공"해도 묵으면 여기서 잡힌다
+    age = _data_age()
+    if age is None:
+        return JSONResponse({"status": "unknown"}, status_code=503)
+    body = {"status": "fresh" if age <= FRESH_FOR else "stale", "age_seconds": int(age.total_seconds())}
+    return body if age <= FRESH_FOR else JSONResponse(body, status_code=503)
 
 
 def _snapshot():
