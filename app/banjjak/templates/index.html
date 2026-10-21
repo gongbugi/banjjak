@@ -3,29 +3,146 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>banjjak · 지금 뜨는 GitHub 레포</title>
+  <title>반짝 | 지금 뜨는 GitHub 레포</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono&family=IBM+Plex+Sans+KR:wght@400;600&display=swap" rel="stylesheet">
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; color: #222; }
-    h1 { font-size: 1.4rem; } .meta { color: #666; font-size: .9rem; }
-    ol { padding-left: 1.4rem; } li { margin: .9rem 0; }
-    .name { font-weight: 600; } .num { color: #b45309; } .est { color: #888; font-size: .8rem; }
+    /* 별을 기록하는 관측 수첩: 옅은 푸른 종이에 남색 잉크, 반짝임만 금색 */
+    :root {
+      --paper: #EDF0F5; --ink: #18213D; --muted: #586179; --rule: #CCD2DF; --code: #E1E6EF; --star: #E2A400;
+      --sans: "IBM Plex Sans KR", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font: 400 1rem/1.65 var(--sans); }
+    a { color: inherit; text-underline-offset: .2em; text-decoration-color: var(--rule); }
+    a:hover { text-decoration-color: var(--ink); }
+    a:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 2px; }
+    main { max-width: 46rem; margin: 0 auto; padding: 3.5rem 1rem 4rem; }
+
+    header h1 { margin: 0; font-size: clamp(2.6rem, 9vw, 4rem); line-height: 1; font-weight: 600; letter-spacing: -.02em;
+                display: flex; align-items: center; gap: .3em; }
+    header h1 svg { width: .62em; height: .62em; fill: var(--star); }
+    .lede { margin: .6rem 0 0; font-size: 1.15rem; }
+    .basis { margin: 1.4rem 0 0; font-weight: 600; }
+    .note { margin: .2rem 0 0; color: var(--muted); max-width: 38rem; }
+
+    .week { margin: 2.6rem 0 0; }
+    .week h2, .ranking h2 { font-size: 1rem; font-weight: 600; margin: 0 0 .7rem; }
+    .week ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .5rem 1.6rem; }
+    .week .n { font-weight: 600; font-variant-numeric: tabular-nums; margin-left: .35em; }
+    .week .prev { color: var(--muted); font-size: .85rem; margin-left: .4em; }
+
+    .ranking { margin: 3rem 0 0; }
+    .ranking ol { list-style: none; margin: 0; padding: 0; }
+    .repo { display: grid; grid-template-columns: 2rem 2rem 1fr; column-gap: .4rem; padding: 1.3rem 0; }
+    .rank { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; padding-top: .05rem; }
+    .spark { display: flex; justify-content: center; padding-top: .3rem; }
+    .spark svg { fill: var(--star); width: calc(1.6rem * var(--glow)); height: calc(1.6rem * var(--glow));
+                 animation: twinkle .9s ease-out both; animation-delay: var(--delay); }
+    @keyframes twinkle {
+      0% { opacity: 0; transform: scale(.2) rotate(-30deg); }
+      60% { opacity: 1; transform: scale(1.18); }
+      100% { transform: scale(1); }
+    }
+    @media (prefers-reduced-motion: reduce) { .spark svg { animation: none; } }
+
+    .head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .1rem 1rem; }
+    .name { font-size: 1.12rem; font-weight: 600; word-break: break-word; }
+    .gain { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .est { color: var(--muted); font-size: .85rem; font-weight: 400; }
+    .desc { margin: .25rem 0 0; }
+    .facts { margin: .35rem 0 0; color: var(--muted); font-size: .9rem; display: flex; flex-wrap: wrap; gap: 0 1.1rem; }
+    .field { color: var(--ink); font-weight: 600; }
+
+    .card { margin: .8rem 0 0; display: grid; grid-template-columns: 5.2rem 1fr; gap: .55rem .6rem; font-size: .92rem; }
+    .card dt { color: var(--muted); padding-top: .1rem; }
+    .card dd { margin: 0; min-width: 0; }
+    pre { margin: 0; padding: .55rem .7rem; background: var(--code); border-radius: 4px; overflow: auto; max-height: 9.5em;
+          font: .84rem/1.5 var(--mono); }
+    .missing { color: var(--muted); }
+    .quote { margin: 0 0 .4rem; padding-left: .7rem; border-left: 2px solid var(--star); overflow-wrap: anywhere; }
+    .quote span { display: block; color: var(--muted); font-size: .82rem; }
+    .related a { margin-right: .9rem; }
+
+    footer { margin: 3rem 0 0; color: var(--muted); font-size: .88rem; max-width: 38rem; }
+    @media (max-width: 520px) {
+      .repo { grid-template-columns: 1.6rem 1.6rem 1fr; }
+      .card { grid-template-columns: 1fr; gap: .2rem; }
+      .card dd { margin-bottom: .5rem; }
+    }
   </style>
 </head>
 <body>
-  <h1>반짝 · 지금 뜨는 GitHub 레포</h1>
-  <p class="meta">{{ basis or "아직 수집 전" }}</p>
-  <p class="meta">최근 30일 안에 생긴 레포 중 별이 빨리 느는 순서예요. 오래된 레포가 갑자기 뜨는 경우는 아직 보지 않아요.</p>
-  <ol>
-  {% for r in items %}
-    <li>
-      <a class="name" href="{{ r.url }}">{{ r.full_name }}</a>
-      <span class="num">⭐ 하루 +{{ r.stars_per_day }}</span>
-      {% if r.estimated %}<span class="est">(첫 기록이라 생성 후 평균으로 추정)</span>{% endif %}
-      <div>{{ r.description or "" }} {% if r.language %}· {{ r.language }}{% endif %} · 별 {{ r.stars }}</div>
-    </li>
-  {% else %}
-    <li>아직 수집된 레포가 없어요.</li>
-  {% endfor %}
-  </ol>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="spark" viewBox="0 0 24 24"><path d="M12 0C13 8 16 11 24 12 16 13 13 16 12 24 11 16 8 13 0 12 8 11 11 8 12 0Z"/></symbol>
+</svg>
+<main>
+  <header>
+    <h1><svg aria-hidden="true"><use href="#spark"/></svg>반짝</h1>
+    <p class="lede">지금 별이 빨리 느는 GitHub 레포</p>
+    <p class="basis">{{ basis or "아직 수집 전이에요" }}</p>
+    <p class="note">최근 30일 안에 생긴 레포 중 별이 빨리 느는 순서예요. 오래된 레포가 갑자기 뜨는 경우는 아직 보지 않아요.</p>
+  </header>
+
+  <section class="week" aria-labelledby="week-title">
+    <h2 id="week-title">이번 주 순위에 새로 든 레포</h2>
+    {% set has_last = week | selectattr("last_week") | list | length > 0 %}
+    {% if week %}
+    <ul>
+      {% for w in week %}
+      <li>{{ w.name }}<span class="n">{{ w.this_week }}</span>{% if has_last %}<span class="prev">지난주 {{ w.last_week }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="note">이번 주 분석이 아직 없어요. 분석기는 매시 20분에 돌아요.</p>
+    {% endif %}
+  </section>
+
+  <section class="ranking" aria-labelledby="rank-title">
+    <h2 id="rank-title">하루 별 증가 순위</h2>
+    <ol>
+    {% for r in items %}
+      <li class="repo" style="--glow: {{ r.glow }}; --delay: {{ [loop.index0 * 40, 1200] | min }}ms">
+        <span class="rank">{{ r.rank }}</span>
+        <span class="spark" aria-hidden="true"><svg><use href="#spark"/></svg></span>
+        <div>
+          <div class="head">
+            <a class="name" href="{{ r.url }}">{{ r.full_name }}</a>
+            <span class="gain">하루 +{{ r.stars_per_day }}{% if r.estimated %} <span class="est">(첫 기록이라 생성 후 평균)</span>{% endif %}</span>
+          </div>
+          {% if r.description %}<p class="desc">{{ r.description }}</p>{% endif %}
+          <p class="facts">
+            {% if r.card %}<span class="field">{{ r.card.category_name }}</span>{% endif %}
+            {% if r.language %}<span>{{ r.language }}</span>{% endif %}
+            <span>별 {{ r.stars }}개</span>
+          </p>
+          {% if r.card %}
+          <dl class="card">
+            <dt>설치</dt>
+            <dd>{% if r.card.usage %}<pre><code>{{ r.card.usage }}</code></pre>{% else %}<span class="missing">README에 없음</span>{% endif %}</dd>
+            {% if r.card.notes %}
+            <dt>알아둘 점</dt>
+            <dd>{% for n in r.card.notes %}<p class="quote"><span>{{ n.name }}</span>{{ n.quote }}</p>{% endfor %}</dd>
+            {% endif %}
+            {% if r.related %}
+            <dt>같은 분야</dt>
+            <dd class="related">{% for name in r.related %}<a href="https://github.com/{{ name }}">{{ name }}</a>{% endfor %}</dd>
+            {% endif %}
+          </dl>
+          {% endif %}
+        </div>
+      </li>
+    {% else %}
+      <li class="note">아직 수집된 레포가 없어요. 수집기는 매시 정각에 돌아요.</li>
+    {% endfor %}
+    </ol>
+  </section>
+
+  <footer>
+    분야, 설치 방법, 알아둘 점은 AI 없이 README를 정해진 규칙으로 읽어 뽑았어요. 틀릴 수 있으니 원문도 확인해 주세요.
+    알아둘 점은 README 문장을 그대로 옮긴 것이에요.
+  </footer>
+</main>
 </body>
 </html>

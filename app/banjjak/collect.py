@@ -24,6 +24,7 @@ def collect_once(search, conn, now):
         items = search(query, page)["items"]
         for it in items:
             row = {k: it[k] for k in ("id", "full_name", "html_url", "description", "language", "created_at")}
+            row["topics"] = it.get("topics", [])   # 분야 분류의 첫 단서 (실측: 절반 정도만 붙어 있다)
             row["last_seen_at"] = now
             conn.execute(insert(db.repos).values(row).on_conflict_do_update(
                 index_elements=["id"], set_={k: row[k] for k in row if k != "id"}))

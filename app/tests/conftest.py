@@ -27,4 +27,4 @@ def _schema():
 @pytest.fixture(autouse=True)
 def _clean():
     with db.engine().begin() as conn:
-        conn.execute(text("TRUNCATE star_snapshots, repos"))
+        conn.execute(text("TRUNCATE analyses, readmes, star_snapshots, repos"))

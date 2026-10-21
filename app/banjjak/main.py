@@ -10,6 +10,7 @@ from prometheus_client.core import GaugeMetricFamily
 from sqlalchemy import text
 
 from banjjak import db
+from banjjak.cards import KST, attach_cards, success_ratio, weekly_tally
 from banjjak.trending import latest_capture, trending
 
 # 지표는 이 앱에 없다. banjjak.serve가 9100 포트로 따로 낸다 (공개 입구로 새지 않게)
@@ -59,30 +60,40 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-def _data_age():
-    """가장 최근 기록이 얼마나 묵었나. DB를 못 읽거나 기록이 없으면 None."""
+def _db_value(measure):
+    """DB에서 값 하나를 잰다. DB를 못 읽으면 None."""
     try:
         with db.engine().connect() as conn:
-            latest = latest_capture(conn)
+            return measure(conn)
     except Exception:
         return None
+
+
+def _data_age():
+    """가장 최근 기록이 얼마나 묵었나. DB를 못 읽거나 기록이 없으면 None."""
+    latest = _db_value(latest_capture)
     return None if latest is None else _now() - latest
 
 
-class _DataAge:
-    # 긁을 때마다 DB에서 잰다. 못 재면 지표를 아예 내지 않는다 (옛 값이나 0을 내면 신선해 보인다)
-    NAME, HELP = "banjjak_data_age_seconds", "now minus the latest star snapshot"
+class _DbGauge:
+    # 긁을 때마다 DB에서 잰다. 못 재면 지표를 아예 내지 않는다 (옛 값이나 0을 내면 정상처럼 보인다)
+    def __init__(self, name, help, measure):
+        self.name, self.help, self.measure = name, help, measure
 
     def describe(self):
-        yield GaugeMetricFamily(self.NAME, self.HELP)
+        yield GaugeMetricFamily(self.name, self.help)
 
     def collect(self):
-        age = _data_age()
-        if age is not None:
-            yield GaugeMetricFamily(self.NAME, self.HELP, value=age.total_seconds())
+        value = self.measure()
+        if value is not None:
+            yield GaugeMetricFamily(self.name, self.help, value=value)
 
 
-REGISTRY.register(_DataAge())
+REGISTRY.register(_DbGauge("banjjak_data_age_seconds", "now minus the latest star snapshot",
+                           lambda: None if (age := _data_age()) is None else age.total_seconds()))
+# #4 규칙 AnalysisSuccessLow가 이 이름을 본다 (95% 미만이 15분)
+REGISTRY.register(_DbGauge("banjjak_analysis_success_ratio", "share of successful analyses in the last 24h",
+                           lambda: _db_value(lambda conn: success_ratio(conn, _now()))))
 
 
 @app.get("/freshness")
@@ -99,21 +110,23 @@ def freshness():
 def _snapshot():
     with db.engine().connect() as conn:
         updated = latest_capture(conn)
-        return (updated.isoformat() if updated else None), trending(conn)
+        items = attach_cards(conn, trending(conn))
+        return (updated.isoformat() if updated else None), items, weekly_tally(conn, _now())
 
 
 @app.get("/api/trending")
 def api_trending():
-    updated_at, items = _snapshot()
-    return {"updated_at": updated_at, "items": items}
-
-
-KST = timezone(timedelta(hours=9))   # 한국은 서머타임이 없어 고정 오프셋으로 충분하다 (tzdata 불필요)
+    updated_at, items, week = _snapshot()
+    return {"updated_at": updated_at, "items": items, "week": week}
 
 
 @app.get("/")
 def index(request: Request):
-    updated_at, items = _snapshot()
+    updated_at, items, week = _snapshot()
     basis = datetime.fromisoformat(updated_at).astimezone(KST) if updated_at else None
     basis_text = f"{basis.year}년 {basis.month}월 {basis.day}일 {basis:%H:%M} 기준 (한국 시간)" if basis else None
-    return templates.TemplateResponse(request, "index.html", {"basis": basis_text, "items": items})
+    # 반짝임 크기: 하루 별 증가를 1위 대비 제곱근으로 (작은 차이도 보이게)
+    top = max((i["stars_per_day"] for i in items), default=0)
+    for i in items:
+        i["glow"] = round(0.35 + 0.65 * (i["stars_per_day"] / top) ** 0.5, 2) if top > 0 else 0.35
+    return templates.TemplateResponse(request, "index.html", {"basis": basis_text, "items": items, "week": week})

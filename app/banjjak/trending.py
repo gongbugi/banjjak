@@ -38,7 +38,7 @@ def trending(conn, limit=50):
             age_days = max((latest - last["created_at"]).total_seconds() / 86400, 1)
             per_day, estimated = last["stars"] / age_days, True
         out.append({
-            "full_name": last["full_name"], "url": last["html_url"], "description": last["description"],
+            "id": last["id"], "full_name": last["full_name"], "url": last["html_url"], "description": last["description"],
             "language": last["language"], "stars": last["stars"],
             "stars_per_day": round(per_day, 1), "estimated": estimated,
         })
