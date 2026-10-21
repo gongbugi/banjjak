@@ -1,0 +1,35 @@
+# 수집기: 매시 정각, 일이 끝나면 파드가 사라진다. 겹쳐 돌지 않는다.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: collector
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+          containers:
+            - name: collector
+              image: banjjak
+              imagePullPolicy: IfNotPresent   # 태그는 커밋 SHA라 바뀌지 않는다. latest 때 붙은 Always가 남지 않게 명시
+              command: ["python", "-m", "banjjak.collect"]
+              env:
+                - name: DATABASE_URL
+                  valueFrom: {secretKeyRef: {name: db, key: url}}
+                - name: GITHUB_TOKEN
+                  valueFrom: {secretKeyRef: {name: github-token, key: token}}
+              resources:
+                requests: {cpu: 50m, memory: 96Mi}
+                limits: {memory: 256Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true

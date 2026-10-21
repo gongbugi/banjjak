@@ -6,6 +6,10 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "prometheus-client>=0.20",
+    "sqlalchemy>=2.1",
+    "psycopg[binary]>=3.3",
+    "alembic>=1.20",
+    "jinja2>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -17,3 +21,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["banjjak"]
+
+[tool.setuptools.package-data]
+banjjak = ["templates/*.html"]

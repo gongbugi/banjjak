@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>banjjak · 지금 뜨는 GitHub 레포</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    h1 { font-size: 1.4rem; } .meta { color: #666; font-size: .9rem; }
+    ol { padding-left: 1.4rem; } li { margin: .9rem 0; }
+    .name { font-weight: 600; } .num { color: #b45309; } .est { color: #888; font-size: .8rem; }
+  </style>
+</head>
+<body>
+  <h1>반짝 · 지금 뜨는 GitHub 레포</h1>
+  <p class="meta">최근 30일 안에 생긴 레포 중 별이 빨리 느는 순서 · 갱신 {{ updated_at or "아직 없음" }}</p>
+  <ol>
+  {% for r in items %}
+    <li>
+      <a class="name" href="{{ r.url }}">{{ r.full_name }}</a>
+      <span class="num">⭐ 하루 +{{ r.stars_per_day }}</span>
+      {% if r.estimated %}<span class="est">(첫 기록이라 생성 후 평균으로 추정)</span>{% endif %}
+      <div>{{ r.description or "" }} {% if r.language %}· {{ r.language }}{% endif %} · 별 {{ r.stars }}</div>
+    </li>
+  {% else %}
+    <li>아직 수집된 레포가 없어요.</li>
+  {% endfor %}
+  </ol>
+</body>
+</html>

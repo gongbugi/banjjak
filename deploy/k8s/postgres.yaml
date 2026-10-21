@@ -1,0 +1,53 @@
+# PostgreSQL 하나. 비밀번호는 Secret `db`(키 password · url)로, 레포에는 두지 않는다.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 2Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  replicas: 1
+  strategy: {type: Recreate}   # 디스크는 한 번에 한 파드만 잡는다 → 먼저 끄고 새로 켜기
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:18-alpine
+          env:
+            - {name: POSTGRES_USER, value: banjjak}
+            - {name: POSTGRES_DB, value: banjjak}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: db, key: password}}
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec: {command: [pg_isready, -U, banjjak, -d, banjjak]}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: postgres}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector: {app: postgres}
+  ports:
+    - port: 5432

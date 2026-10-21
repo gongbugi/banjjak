@@ -3,8 +3,10 @@ kind: Kustomization
 namespace: banjjak
 resources:
   - namespace.yaml
+  - postgres.yaml
   - app.yaml
+  - collector.yaml
 images:
   - name: banjjak
     newName: ghcr.io/gongbugi/banjjak
-    newTag: latest
+    newTag: latest   # 실제 배포는 deploy/apply.sh가 커밋 SHA로 고정한다 (롤백이 의미 있으려면 태그가 달라야 한다)

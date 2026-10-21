@@ -12,15 +12,31 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
+      initContainers:
+        # 스키마는 Alembic으로만 바꾼다 (앱이 알아서 고치지 않는다)
+        - name: migrate
+          image: banjjak
+          imagePullPolicy: IfNotPresent   # 태그는 커밋 SHA라 바뀌지 않는다. latest 때 붙은 Always가 남지 않게 명시
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: db, key: url}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
       containers:
         - name: web
           image: banjjak
+          imagePullPolicy: IfNotPresent   # 태그는 커밋 SHA라 바뀌지 않는다. latest 때 붙은 Always가 남지 않게 명시
           ports:
             - containerPort: 8000
+          env:
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: db, key: url}}
           readinessProbe:
-            httpGet: {path: /healthz, port: 8000}
+            httpGet: {path: /readyz, port: 8000}   # DB 확인은 여기서만
           livenessProbe:
-            httpGet: {path: /healthz, port: 8000}
+            httpGet: {path: /healthz, port: 8000}  # 프로세스 생존만
             periodSeconds: 20
           resources:
             requests: {cpu: 50m, memory: 96Mi}
