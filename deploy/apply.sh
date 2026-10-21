@@ -16,4 +16,7 @@ images:
     newTag: "$tag"
 EOF
 kubectl --context "$ctx" apply -k "$here/.pin"
+# 배포 기록: 언제 어떤 커밋을 올렸나를 배포 이력(rollout history)에 남긴다. 운영 AI의 "최근 배포" 증거가 된다
+kubectl --context "$ctx" -n banjjak annotate deploy/web --overwrite \
+  kubernetes.io/change-cause="deploy ${tag:0:12} at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 kubectl --context "$ctx" -n banjjak rollout status deploy/web --timeout=300s
