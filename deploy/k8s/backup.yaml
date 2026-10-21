@@ -1,0 +1,69 @@
+# DB 백업: 매일 03:30(한국 시간) pg_dump → Azure Blob. 7일 보관은 Blob 수명 주기 규칙이 맡는다.
+# Secret `backup-blob`(container_url · sas)이 없는 클러스터(로컬 k3d)에서는 업로드를 건너뛰고 성공으로 끝난다.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup
+spec:
+  schedule: "30 3 * * *"
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          restartPolicy: Never
+          volumes:
+            - name: dump
+              emptyDir: {}
+          initContainers:
+            - name: dump
+              image: postgres:18-alpine
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -e
+                  name="banjjak-$(date -u +%Y%m%dT%H%M%SZ).dump"
+                  pg_dump -h postgres -U banjjak -d banjjak -Fc -f "/dump/$name"
+                  echo "$name" > /dump/NAME
+                  echo "dumped $name ($(wc -c < "/dump/$name") bytes)"
+              env:
+                - name: PGPASSWORD
+                  valueFrom: {secretKeyRef: {name: db, key: password}}
+              volumeMounts:
+                - {name: dump, mountPath: /dump}
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 70            # 이미지 안의 postgres 사용자
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+          containers:
+            - name: upload
+              image: curlimages/curl:8.22.0
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -e
+                  name=$(cat /dump/NAME)
+                  if [ -z "$CONTAINER_URL" ]; then echo "no backup-blob secret: skip upload"; exit 0; fi
+                  curl --fail -sS -X PUT -H "x-ms-blob-type: BlockBlob" \
+                    --data-binary "@/dump/$name" "$CONTAINER_URL/$name?$SAS"
+                  echo "uploaded $name"
+              env:
+                - name: CONTAINER_URL
+                  valueFrom: {secretKeyRef: {name: backup-blob, key: container_url, optional: true}}
+                - name: SAS
+                  valueFrom: {secretKeyRef: {name: backup-blob, key: sas, optional: true}}
+              volumeMounts:
+                - {name: dump, mountPath: /dump, readOnly: true}
+              resources:
+                requests: {cpu: 20m, memory: 32Mi}
+                limits: {memory: 128Mi}
+              securityContext:
+                runAsNonRoot: true
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true

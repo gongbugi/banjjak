@@ -6,6 +6,7 @@ resources:
   - postgres.yaml
   - app.yaml
   - collector.yaml
+  - backup.yaml
 images:
   - name: banjjak
     newName: ghcr.io/gongbugi/banjjak
