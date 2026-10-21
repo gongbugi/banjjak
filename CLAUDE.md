@@ -45,3 +45,4 @@ Not lazy about: understanding the problem (read it fully and trace the real flow
 - **AI 출력은 코드가 검증한다.** 요약의 근거 문장은 README 원문과 대조, 태그는 정해진 목록에서만, 사용법은 README 코드 블록을 글자 그대로
 - **LLM 비용 상한.** 예산은 총액 5만원이다. 폭주 루프 한 번이 예산 전체다
 - **SLI 숫자.** 가용성 99% · 응답 p95 500ms · 데이터 신선도 2시간 · 분석 성공률 95%. 히스토그램은 기록 안 한 경계를 나중에 되살릴 수 없다
+- **이미지에 비밀값을 넣지 않는다.** `ghcr.io/gongbugi/banjjak`은 공개 이미지이고, 한 번 공개한 패키지는 비공개로 되돌릴 수 없다. API 키·토큰·비밀번호는 k8s Secret으로만 넣고, Dockerfile은 코드(`pyproject.toml` · `banjjak/`)만 복사한다. `COPY . .` 같은 통째 복사를 하지 않는다
