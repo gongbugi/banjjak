@@ -37,7 +37,9 @@ spec:
             limits: {memory: 512Mi}
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
+            # 13은 시작할 때 내장 데이터 소스 플러그인(prometheus 포함)을 이미지 안 plugins-bundled에서 옮겨 설치한다.
+            # 읽기 전용이면 설치가 실패해 패널이 전부 No data가 된다 (2026-10-21 직접 밟음)
+            readOnlyRootFilesystem: false
           volumeMounts:
             - {name: data, mountPath: /var/lib/grafana}
             - {name: tmp, mountPath: /tmp}

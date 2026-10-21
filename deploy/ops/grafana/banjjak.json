@@ -20,7 +20,7 @@
       "datasource": {"type": "prometheus", "uid": "prom"},
       "targets": [{"refId": "A", "legendFormat": "p95",
         "expr": "histogram_quantile(0.95, sum by (le) (rate(banjjak_http_request_duration_seconds_bucket{route=~\"/|/api/trending\"}[5m])))"}],
-      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}},
+      "fieldConfig": {"defaults": {"noValue": "화면 요청 없음", "unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}},
         "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.5}]}}, "overrides": []}
     },
     {
@@ -29,7 +29,7 @@
       "datasource": {"type": "prometheus", "uid": "prom"},
       "targets": [{"refId": "A", "legendFormat": "5xx",
         "expr": "sum(rate(banjjak_http_request_duration_seconds_count{route=~\"/|/api/trending\", status=~\"5..\"}[5m])) / sum(rate(banjjak_http_request_duration_seconds_count{route=~\"/|/api/trending\"}[5m]))"}],
-      "fieldConfig": {"defaults": {"unit": "percentunit", "custom": {"thresholdsStyle": {"mode": "line"}},
+      "fieldConfig": {"defaults": {"noValue": "화면 요청 없음", "unit": "percentunit", "custom": {"thresholdsStyle": {"mode": "line"}},
         "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.05}]}}, "overrides": []}
     },
     {
