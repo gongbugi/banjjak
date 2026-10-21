@@ -30,6 +30,7 @@ spec:
           imagePullPolicy: IfNotPresent   # 태그는 커밋 SHA라 바뀌지 않는다. latest 때 붙은 Always가 남지 않게 명시
           ports:
             - containerPort: 8000
+            - {name: metrics, containerPort: 9100}   # 수집기는 이 이름의 포트만 긁는다. Service에는 넣지 않는다
           env:
             - name: DATABASE_URL
               valueFrom: {secretKeyRef: {name: db, key: url}}

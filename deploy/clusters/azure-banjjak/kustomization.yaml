@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../k8s
+  - ../../agent
+configMapGenerator:
+  - name: agent-target
+    namespace: observe
+    behavior: replace
+    # 운영 VM의 사설 IP. 같은 가상 네트워크 안에서만 닿는다 (방화벽이 밖에서 오는 9090을 막는다)
+    literals: [url=http://10.0.0.5:9090/api/v1/write]

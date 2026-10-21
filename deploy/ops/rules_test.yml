@@ -1,0 +1,90 @@
+# promtool test rules rules_test.yml : 가짜 시계열로 규칙이 울리는 때와 안 울리는 때를 확인한다 (CI)
+rule_files: [rules.yml]
+evaluation_interval: 1m
+
+tests:
+  # 수집이 멈춰 나이가 1분에 60초씩 는다: 4분에 2시간을 넘고, 5분을 더 버틴 뒤 울린다
+  - interval: 1m
+    input_series:
+      - series: 'banjjak_data_age_seconds{pod="web-a"}'
+        values: '7000+60x20'
+    alert_rule_test:
+      - {eval_time: 3m, alertname: DataStale, exp_alerts: []}
+      - {eval_time: 8m, alertname: DataStale, exp_alerts: []}
+      - eval_time: 10m
+        alertname: DataStale
+        exp_alerts:
+          - exp_annotations: {summary: 마지막 수집 기록이 2시간보다 오래됐다}
+      - {eval_time: 10m, alertname: DataAgeMissing, exp_alerts: []}
+
+  # 지표 자체가 없다 (웹 · 에이전트 · 앱 VM이 멈춤)
+  - interval: 1m
+    input_series:
+      - series: 'up{job="prometheus"}'
+        values: '1x20'
+    alert_rule_test:
+      - {eval_time: 9m, alertname: DataAgeMissing, exp_alerts: []}
+      - eval_time: 11m
+        alertname: DataAgeMissing
+        exp_alerts:
+          - exp_annotations: {summary: 데이터 나이 지표가 10분째 들어오지 않는다}
+      - {eval_time: 11m, alertname: AnalysisSuccessLow, exp_alerts: []}   # 분석 지표가 아직 없으면 울리지 않는다
+
+  # 화면 요청 70개 중 10개가 500. /healthz의 200 수천 개가 섞여도 비율이 희석되지 않아야 울린다
+  - interval: 1m
+    input_series:
+      - series: 'banjjak_http_request_duration_seconds_count{route="/", method="GET", status="200"}'
+        values: '0+60x20'
+      - series: 'banjjak_http_request_duration_seconds_count{route="/", method="GET", status="500"}'
+        values: '0+10x20'
+      - series: 'banjjak_http_request_duration_seconds_count{route="/healthz", method="GET", status="200"}'
+        values: '0+5000x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: WebErrorRateHigh
+        exp_alerts:
+          - exp_annotations: {summary: 웹 5xx 비율이 5분째 5%를 넘는다}
+
+  # 화면 요청의 절반이 0.5~1초 → p95가 500ms를 넘는다. 빠른 /healthz는 섞이지 않는다
+  - interval: 1m
+    input_series:
+      - series: 'banjjak_http_request_duration_seconds_bucket{route="/", le="0.5"}'
+        values: '0+50x20'
+      - series: 'banjjak_http_request_duration_seconds_bucket{route="/", le="1"}'
+        values: '0+100x20'
+      - series: 'banjjak_http_request_duration_seconds_bucket{route="/", le="+Inf"}'
+        values: '0+100x20'
+      - series: 'banjjak_http_request_duration_seconds_bucket{route="/healthz", le="0.5"}'
+        values: '0+5000x20'
+      - series: 'banjjak_http_request_duration_seconds_bucket{route="/healthz", le="1"}'
+        values: '0+5000x20'
+      - series: 'banjjak_http_request_duration_seconds_bucket{route="/healthz", le="+Inf"}'
+        values: '0+5000x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: WebLatencyP95High
+        exp_alerts:
+          - exp_annotations: {summary: 웹 p95가 5분째 500ms를 넘는다}
+
+  # 화면 요청이 모두 0.25초 안: 울리지 않는다
+  - interval: 1m
+    input_series:
+      - series: 'banjjak_http_request_duration_seconds_bucket{route="/", le="0.25"}'
+        values: '0+100x20'
+      - series: 'banjjak_http_request_duration_seconds_bucket{route="/", le="0.5"}'
+        values: '0+100x20'
+      - series: 'banjjak_http_request_duration_seconds_bucket{route="/", le="+Inf"}'
+        values: '0+100x20'
+    alert_rule_test:
+      - {eval_time: 10m, alertname: WebLatencyP95High, exp_alerts: []}
+
+  # 최근 24시간 성공률 90%
+  - interval: 1m
+    input_series:
+      - series: 'banjjak_analysis_success_ratio{pod="web-a"}'
+        values: '0.9x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: AnalysisSuccessLow
+        exp_alerts:
+          - exp_annotations: {summary: 최근 24시간 분석 성공률이 95% 아래다}

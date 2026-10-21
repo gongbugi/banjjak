@@ -25,10 +25,21 @@ jobs:
       - run: pytest -q
       - name: k8s 매니페스트 렌더
         working-directory: .
-        run: kubectl kustomize deploy/k8s > /dev/null
+        run: for d in deploy/k8s deploy/agent deploy/ops deploy/clusters/*/; do kubectl kustomize "$d" > /dev/null; done
+
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 경보 규칙을 가짜 시계열로 시험하고, 두 Prometheus 설정의 문법을 본다 (운영과 같은 버전의 promtool)
+      - run: |
+          promtool() { docker run --rm -v "$PWD/deploy:/d" -w /d --entrypoint promtool prom/prometheus:v3.13.4 "$@"; }
+          promtool test rules ops/rules_test.yml
+          promtool check config ops/prometheus.yml
+          promtool check config --agent agent/agent.yml
 
   image:
-    needs: test
+    needs: [test, rules]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions: {contents: read, packages: write}

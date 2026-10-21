@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observe
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent
+  namespace: observe
+---
+# 에이전트가 읽을 수 있는 것은 서비스 네임스페이스의 파드 목록뿐
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-pod-reader
+  namespace: banjjak
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-pod-reader
+  namespace: banjjak
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-pod-reader}
+subjects:
+  - {kind: ServiceAccount, name: agent, namespace: observe}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+  namespace: observe
+spec:
+  replicas: 1
+  strategy: {type: Recreate}   # 둘이 겹쳐 같은 지표를 두 번 보내지 않게
+  selector:
+    matchLabels: {app: agent}
+  template:
+    metadata:
+      labels: {app: agent}
+    spec:
+      serviceAccountName: agent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534           # 이미지 사용자 nobody
+      containers:
+        - name: agent
+          image: prom/prometheus:v3.13.4
+          command: ["sh", "-c"]
+          args:
+            - |
+              sed "s|http://remote-write.invalid/api/v1/write|$REMOTE_WRITE_URL|" /etc/agent/agent.yml > /tmp/agent.yml
+              exec /bin/prometheus --agent --config.file=/tmp/agent.yml --storage.agent.path=/data
+          env:
+            - name: REMOTE_WRITE_URL
+              valueFrom: {configMapKeyRef: {name: agent-target, key: url}}
+          ports:
+            - containerPort: 9090
+          readinessProbe:
+            httpGet: {path: /-/ready, port: 9090}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: config, mountPath: /etc/agent}
+            - {name: tmp, mountPath: /tmp}
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: config
+          configMap: {name: agent-config}
+        - name: tmp
+          emptyDir: {}
+        - name: data               # 보내기 대기열(WAL). 운영 VM이 잠깐 끊겨도 여기 쌓였다가 보낸다
+          emptyDir: {}

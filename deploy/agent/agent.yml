@@ -1,0 +1,24 @@
+# 앱 클러스터의 수집 전용 Prometheus(에이전트 모드). 긁어서 운영 VM으로 보내기만 하고, 저장 · 규칙은 운영 VM이 한다
+global:
+  scrape_interval: 15s
+  external_labels: {cluster: app}
+
+scrape_configs:
+  - job_name: banjjak
+    kubernetes_sd_configs:
+      # 서비스 네임스페이스만 본다. 장애 주입은 다른 네임스페이스라 애초에 대상이 아니다 (권한도 이 네임스페이스뿐)
+      - role: pod
+        namespaces: {names: [banjjak]}
+    relabel_configs:
+      # Service를 거치지 않고 파드를 하나씩 긁는다 → 파드가 늘어도 숫자가 섞이지 않는다
+      - {source_labels: [__meta_kubernetes_pod_container_port_name], regex: metrics, action: keep}
+      - {source_labels: [__meta_kubernetes_namespace], target_label: namespace}
+      - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+      - {source_labels: [__meta_kubernetes_pod_label_app], target_label: app}
+
+  # 에이전트 자신. 보내기 실패(prometheus_remote_storage_*)를 운영 쪽에서 본다
+  - job_name: agent
+    static_configs: [{targets: ["localhost:9090"]}]
+
+remote_write:
+  - url: http://remote-write.invalid/api/v1/write   # 시작할 때 REMOTE_WRITE_URL로 바꾼다 (클러스터마다 다르다)

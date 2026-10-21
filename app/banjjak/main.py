@@ -1,19 +1,39 @@
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
-from prometheus_client import REGISTRY, make_asgi_app
+from prometheus_client import REGISTRY, Histogram
 from prometheus_client.core import GaugeMetricFamily
 from sqlalchemy import text
 
 from banjjak import db
 from banjjak.trending import latest_capture, trending
 
+# 지표는 이 앱에 없다. banjjak.serve가 9100 포트로 따로 낸다 (공개 입구로 새지 않게)
 app = FastAPI(title="banjjak")
-app.mount("/metrics", make_asgi_app())
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+
+# 0.5초 칸: p95 500ms 규칙이 경계에서 어림이 아니라 정확해진다
+REQUEST_SECONDS = Histogram(
+    "banjjak_http_request_duration_seconds", "web request latency", ["route", "method", "status"],
+    buckets=(0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10))
+
+
+@app.middleware("http")
+async def _observe(request: Request, call_next):
+    start, status = time.perf_counter(), 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        # 실제 주소가 아니라 경로 틀로 센다. 모르는 주소는 한 칸으로 (지표 종류가 끝없이 늘지 않게)
+        route = request.scope.get("route")
+        REQUEST_SECONDS.labels(route.path if route else "unmatched", request.method, str(status)).observe(
+            time.perf_counter() - start)
 
 
 @app.get("/healthz")

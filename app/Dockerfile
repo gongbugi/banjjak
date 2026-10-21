@@ -6,6 +6,6 @@ COPY banjjak ./banjjak
 COPY migrations ./migrations
 RUN pip install --no-cache-dir . && useradd --uid 10001 app
 USER 10001
-EXPOSE 8000
-# 같은 이미지로 web · 수집기(python -m banjjak.collect) · 마이그레이션(alembic upgrade head)을 돌린다
-CMD ["uvicorn", "banjjak.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8000 9100
+# 같은 이미지로 web(앱 8000 · 지표 9100) · 수집기(python -m banjjak.collect) · 마이그레이션(alembic upgrade head)을 돌린다
+CMD ["python", "-m", "banjjak.serve"]

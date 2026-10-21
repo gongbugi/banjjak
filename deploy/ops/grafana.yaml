@@ -1,0 +1,66 @@
+# 대시보드와 데이터 소스는 파일로만 만든다 → 디스크 없이 다시 떠도 그대로다
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: grafana}
+  template:
+    metadata:
+      labels: {app: grafana}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472             # 이미지 사용자 grafana
+      containers:
+        - name: grafana
+          image: grafana/grafana:13.2.3
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: grafana-admin, key: password}}
+            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "false"}
+            - {name: GF_USERS_ALLOW_SIGN_UP, value: "false"}
+            - {name: GF_LOG_MODE, value: console}              # 파일 로그를 쓰지 않는다 (읽기 전용 루트)
+            - {name: GF_ANALYTICS_REPORTING_ENABLED, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_UPDATES, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES, value: "false"}
+            - {name: GF_NEWS_NEWS_FEED_ENABLED, value: "false"}
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet: {path: /api/health, port: 3000}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/grafana}
+            - {name: tmp, mountPath: /tmp}
+            - {name: datasources, mountPath: /etc/grafana/provisioning/datasources}
+            - {name: dashboards, mountPath: /etc/grafana/provisioning/dashboards}
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: datasources
+          configMap: {name: grafana-datasources}
+        - name: dashboards
+          configMap: {name: grafana-dashboards}
+---
+# 운영 VM의 3000. 방화벽(NSG)이 본인 IP에서 오는 것만 연다
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+spec:
+  type: LoadBalancer
+  selector: {app: grafana}
+  ports:
+    - port: 3000
+      targetPort: 3000

@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from prometheus_client import REGISTRY, generate_latest
 from sqlalchemy.exc import OperationalError
 
 from banjjak import db, main
@@ -42,7 +43,7 @@ def test_no_data_is_not_fresh():
 
 def test_data_age_metric(seeded, monkeypatch):
     _at(monkeypatch, timedelta(minutes=30))
-    assert "banjjak_data_age_seconds 1800.0" in client.get("/metrics/").text
+    assert "banjjak_data_age_seconds 1800.0" in generate_latest(REGISTRY).decode()
 
 
 class _DownEngine:
@@ -54,4 +55,4 @@ def test_db_down_means_503_and_no_metric(seeded, monkeypatch):
     monkeypatch.setattr(db, "engine", lambda: _DownEngine())
     assert client.get("/freshness").status_code == 503
     # 옛 값이나 0을 내면 신선해 보인다 → 지표 자체를 내지 않는다
-    assert "banjjak_data_age_seconds " not in client.get("/metrics/").text
+    assert "banjjak_data_age_seconds " not in generate_latest(REGISTRY).decode()

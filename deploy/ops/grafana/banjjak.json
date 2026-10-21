@@ -1,0 +1,52 @@
+{
+  "uid": "banjjak-sli",
+  "title": "banjjak SLI",
+  "schemaVersion": 39,
+  "editable": false,
+  "refresh": "1m",
+  "time": {"from": "now-24h", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "데이터 나이 (목표 2시간 이내)",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [{"refId": "A", "expr": "max(banjjak_data_age_seconds)"}],
+      "fieldConfig": {"defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [
+        {"color": "green", "value": null}, {"color": "red", "value": 7200}]}}, "overrides": []}
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "웹 p95 (목표 500ms, 화면 요청만)",
+      "gridPos": {"x": 6, "y": 0, "w": 9, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [{"refId": "A", "legendFormat": "p95",
+        "expr": "histogram_quantile(0.95, sum by (le) (rate(banjjak_http_request_duration_seconds_bucket{route=~\"/|/api/trending\"}[5m])))"}],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}},
+        "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.5}]}}, "overrides": []}
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "웹 5xx 비율 (화면 요청만)",
+      "gridPos": {"x": 15, "y": 0, "w": 9, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [{"refId": "A", "legendFormat": "5xx",
+        "expr": "sum(rate(banjjak_http_request_duration_seconds_count{route=~\"/|/api/trending\", status=~\"5..\"}[5m])) / sum(rate(banjjak_http_request_duration_seconds_count{route=~\"/|/api/trending\"}[5m]))"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "custom": {"thresholdsStyle": {"mode": "line"}},
+        "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.05}]}}, "overrides": []}
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "데이터 나이",
+      "gridPos": {"x": 0, "y": 6, "w": 12, "h": 7},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [{"refId": "A", "legendFormat": "나이", "expr": "max(banjjak_data_age_seconds)"}],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}},
+        "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 7200}]}}, "overrides": []}
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "초당 요청 (경로별)",
+      "gridPos": {"x": 12, "y": 6, "w": 12, "h": 7},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [{"refId": "A", "legendFormat": "{{route}} {{status}}",
+        "expr": "sum by (route, status) (rate(banjjak_http_request_duration_seconds_count[5m]))"}],
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []}
+    }
+  ]
+}

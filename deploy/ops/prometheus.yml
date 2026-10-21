@@ -1,0 +1,11 @@
+# 운영 VM의 Prometheus: 앱 클러스터 에이전트가 보낸 지표를 받아(remote write) 저장하고 SLI 규칙을 검사한다
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files: [rules.yml]
+
+# 운영 클러스터에서 직접 긁는 것은 자기 자신뿐 (운영 AI는 #7에서 붙인다). 장애 주입기는 긁지 않는다
+scrape_configs:
+  - job_name: prometheus
+    static_configs: [{targets: ["localhost:9090"]}]
