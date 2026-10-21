@@ -89,7 +89,8 @@ def test_notes_skip_what_is_not_a_warning():
     readme = ("It collects no usage data and sends no telemetry.\n\n"
               "To report a security issue, see SECURITY.md.\n\n"
               "No proprietary code or assets.\n\n"
-              "[Unauthorized commercial use](#unauthorized-commercial-use)\n")
+              "[Unauthorized commercial use](#unauthorized-commercial-use)\n\n"
+              "Insert clips onto the patched tracks.\n")     # code-v2 오탐: 보안과 무관한 "patched"
     assert extract_notes(readme) == []
 
 

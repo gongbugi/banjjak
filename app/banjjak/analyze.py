@@ -20,7 +20,8 @@ from banjjak.trending import trending
 
 # code-v1 → code-v2 (2026-10-21): 운영 첫 분석 50개에서 본 알아둘 점 오탐(부정문 · 보안 신고 안내 ·
 # "proprietary" · 목차 링크)을 걸렀다
-METHOD = "code-v2"
+# code-v2 → code-v3 (2026-10-21): v2에서 더한 "patched"가 보안과 무관한 문장 3개를 잡아 뺐다
+METHOD = "code-v3"
 RANKED = 50                      # 화면에 보이는 순위만 분석한다
 RECHECK = timedelta(days=1)      # README가 바뀌었나는 하루 한 번까지만 본다
 MAX_README = 300_000             # 아주 긴 README는 앞부분만 저장 · 분석한다
@@ -167,7 +168,7 @@ NOTE_KINDS = [
                 re.I),
      None),
     ("security", "보안",
-     re.compile(r"security (fix|patch|advisory|update)|vulnerabilit(y|ies) (in|fixed)|\bcve-\d|patched", re.I),
+     re.compile(r"security (fix|patch|advisory|update)|vulnerabilit(y|ies) (in|fixed)|\bcve-\d", re.I),
      re.compile(r"report|security\.md|bug bount|disclos", re.I)),                       # 신고 안내는 어느 레포에나 있다
     ("maturity", "아직 실험 단계",
      re.compile(r"\bexperimental\b|\balpha\b|early (preview|access)|not (yet )?(ready )?for production|"
