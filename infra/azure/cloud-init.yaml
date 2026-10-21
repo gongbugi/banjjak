@@ -1,0 +1,6 @@
+#cloud-config
+# VM이 처음 켜질 때 k3s를 설치한다. __PUBLIC_IP__는 create.ps1이 채운다.
+# k3s 버전은 로컬 k3d(v1.35.5-k3s1)와 맞춘다.
+package_update: true
+runcmd:
+  - curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.35.5+k3s1" INSTALL_K3S_EXEC="server --tls-san __PUBLIC_IP__ --write-kubeconfig-mode 600" sh -
