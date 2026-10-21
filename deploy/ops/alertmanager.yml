@@ -1,0 +1,23 @@
+# 울린 알림을 이름별로 묶고 중복을 걸러 Slack(사람)과 운영 AI 두 곳으로 보낸다
+route:
+  receiver: slack
+  group_by: [alertname]
+  group_wait: 30s        # 같은 이름이 잇달아 울리면 30초 모아 한 번에
+  group_interval: 5m
+  repeat_interval: 4h    # 계속 울리는 중이면 4시간마다 다시 알린다
+  routes:
+    - receiver: slack
+      continue: true     # 사람에게도 가고
+    - receiver: ops-ai   # 운영 AI에도 간다. 두 수신처는 따로 보내고 따로 다시 시도한다 → 운영 AI가 죽어도 Slack은 간다
+
+receivers:
+  - name: slack
+    slack_configs:
+      - api_url_file: /etc/alertmanager-secrets/slack/url   # Secret slack-webhook (Incoming Webhook 주소)
+        send_resolved: true
+        title: '{{ if eq .Status "firing" }}🔴 울림{{ else }}🟢 풀림{{ end }} · {{ .CommonLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ "\n" }}{{ end }}'
+  - name: ops-ai
+    webhook_configs:
+      - url: http://ops-ai.ops-ai.svc:8080/alerts
+        send_resolved: true

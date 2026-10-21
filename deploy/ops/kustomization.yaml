@@ -1,16 +1,13 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# 운영 VM 클러스터: kubectl --context azure-banjjak-ops apply -k deploy/ops
-# 먼저 Secret grafana-admin이 있어야 Grafana가 뜬다 → infra/azure/grafana-admin.ps1
+# 관측 · 알림: Prometheus + Alertmanager. 클러스터별 묶음은 deploy/clusters/<context>
 namespace: observe
 resources:
   - namespace.yaml
   - prometheus.yaml
-  - grafana.yaml
+  - alertmanager.yaml
 configMapGenerator:
   - name: prometheus-config
     files: [prometheus.yml, rules.yml]
-  - name: grafana-datasources
-    files: [grafana/datasource.yml]
-  - name: grafana-dashboards
-    files: [grafana/dashboards.yml, grafana/banjjak.json]
+  - name: alertmanager-config
+    files: [alertmanager.yml]

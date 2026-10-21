@@ -1,12 +1,12 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# namespace를 한꺼번에 정하지 않는다: 권한(Role)은 banjjak에, 에이전트는 observe에 있다
+# namespace를 한꺼번에 정하지 않는다: 권한(Role)은 banjjak에, 에이전트는 agent에 있다
 resources:
   - agent.yaml
 configMapGenerator:
   - name: agent-config
-    namespace: observe
+    namespace: agent
     files: [agent.yml]
   - name: agent-target
-    namespace: observe
+    namespace: agent
     literals: [url=http://remote-write.invalid/api/v1/write]   # 보낼 곳은 클러스터마다 deploy/clusters/<context>에서 덮어쓴다

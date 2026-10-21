@@ -1,11 +1,13 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+# 로컬은 VM이 하나라 운영 쪽(관측 · 알림 · 운영 AI)도 같은 클러스터에 올린다. Grafana는 뺀다
 resources:
   - ../../k8s
   - ../../agent
+  - ../../ops
+  - ../../opsai
 configMapGenerator:
   - name: agent-target
-    namespace: observe
+    namespace: agent
     behavior: replace
-    # 로컬은 VM이 하나라 운영 쪽(deploy/ops)도 같은 클러스터에 올린다
     literals: [url=http://prometheus.observe.svc:9090/api/v1/write]

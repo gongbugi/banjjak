@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: alertmanager}
+  template:
+    metadata:
+      labels: {app: alertmanager}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534           # 이미지 사용자 nobody
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.34.1
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+            - --cluster.listen-address=   # 한 대뿐이라 여러 대 묶기(가십)를 끈다
+          ports:
+            - containerPort: 9093
+          readinessProbe:
+            httpGet: {path: /-/ready, port: 9093}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: config, mountPath: /etc/alertmanager}
+            - {name: slack, mountPath: /etc/alertmanager-secrets/slack, readOnly: true}
+            - {name: data, mountPath: /alertmanager}
+      volumes:
+        - name: config
+          configMap: {name: alertmanager-config}
+        - name: slack                # 없으면 Slack 보내기만 실패하고, 운영 AI 쪽은 그대로 간다
+          secret: {secretName: slack-webhook, optional: true}
+        - name: data                 # 침묵 설정 · 보낸 기록. ponytail: 다시 뜨면 비어서 울리는 중인 알림을 한 번 더 보낼 수 있다
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+spec:
+  selector: {app: alertmanager}
+  ports:
+    - port: 9093
+      targetPort: 9093

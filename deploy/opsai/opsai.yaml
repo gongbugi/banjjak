@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ops-ai
+---
+# 운영 AI 자리: 지금은 Alertmanager가 보낸 알림을 기록만 한다 (#7부터 채운다)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ops-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ops-ai}
+  template:
+    metadata:
+      labels: {app: ops-ai}
+    spec:
+      automountServiceAccountToken: false   # 운영 클러스터 API는 쓰지 않는다. 앱 클러스터 권한은 #7에서 따로 준다
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: ops-ai
+          image: banjjak
+          imagePullPolicy: IfNotPresent     # 태그는 커밋 SHA라 바뀌지 않는다
+          command: ["uvicorn", "banjjak.opsai:app", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ops-ai
+spec:
+  selector: {app: ops-ai}
+  ports:
+    - port: 8080
+      targetPort: 8080

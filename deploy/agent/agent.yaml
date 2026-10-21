@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: observe
+  name: agent
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: agent
-  namespace: observe
+  namespace: agent
 ---
 # 에이전트가 읽을 수 있는 것은 서비스 네임스페이스의 파드 목록뿐
 apiVersion: rbac.authorization.k8s.io/v1
@@ -27,13 +27,13 @@ metadata:
   namespace: banjjak
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-pod-reader}
 subjects:
-  - {kind: ServiceAccount, name: agent, namespace: observe}
+  - {kind: ServiceAccount, name: agent, namespace: agent}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: agent
-  namespace: observe
+  namespace: agent
 spec:
   replicas: 1
   strategy: {type: Recreate}   # 둘이 겹쳐 같은 지표를 두 번 보내지 않게

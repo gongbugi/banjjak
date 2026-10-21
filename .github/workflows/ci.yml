@@ -25,7 +25,7 @@ jobs:
       - run: pytest -q
       - name: k8s 매니페스트 렌더
         working-directory: .
-        run: for d in deploy/k8s deploy/agent deploy/ops deploy/clusters/*/; do kubectl kustomize "$d" > /dev/null; done
+        run: for d in deploy/k8s deploy/agent deploy/ops deploy/opsai deploy/grafana deploy/clusters/*/; do kubectl kustomize "$d" > /dev/null; done
 
   rules:
     runs-on: ubuntu-latest
@@ -37,6 +37,13 @@ jobs:
           promtool test rules ops/rules_test.yml
           promtool check config ops/prometheus.yml
           promtool check config --agent agent/agent.yml
+      # 알림 길: 설정 문법 + 어떤 규칙이 울려도 Slack과 운영 AI 두 곳으로 가는지
+      - run: |
+          amtool() { docker run --rm -v "$PWD/deploy:/d" -w /d --entrypoint amtool prom/alertmanager:v0.34.1 "$@"; }
+          amtool check-config ops/alertmanager.yml
+          for a in $(sed -n 's/^ *- alert: //p' deploy/ops/rules.yml); do
+            amtool config routes test --config.file=ops/alertmanager.yml --verify.receivers=slack,ops-ai alertname=$a
+          done
 
   image:
     needs: [test, rules]

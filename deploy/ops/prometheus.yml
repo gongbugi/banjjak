@@ -5,6 +5,10 @@ global:
 
 rule_files: [rules.yml]
 
+alerting:
+  alertmanagers:
+    - static_configs: [{targets: ["alertmanager:9093"]}]
+
 # 운영 클러스터에서 직접 긁는 것은 자기 자신뿐 (운영 AI는 #7에서 붙인다). 장애 주입기는 긁지 않는다
 scrape_configs:
   - job_name: prometheus
