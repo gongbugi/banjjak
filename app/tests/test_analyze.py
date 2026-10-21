@@ -84,6 +84,15 @@ def test_notes_quote_readme_sentences():
         assert quote in README          # 인용은 README 원문에 그대로 있다
 
 
+def test_notes_skip_what_is_not_a_warning():
+    # 실측(운영 첫 분석 50개)에서 많던 오탐: 부정문 · 보안 신고 안내 · "proprietary" · 목차 링크
+    readme = ("It collects no usage data and sends no telemetry.\n\n"
+              "To report a security issue, see SECURITY.md.\n\n"
+              "No proprietary code or assets.\n\n"
+              "[Unauthorized commercial use](#unauthorized-commercial-use)\n")
+    assert extract_notes(readme) == []
+
+
 def test_notes_skip_code_and_empty_when_nothing():
     assert extract_notes("```\ntelemetry = off\n```\n\nNothing to see.") == []
 

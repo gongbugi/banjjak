@@ -1,7 +1,8 @@
-"""분석기 (code-v1): 순위에 든 레포의 README를 읽어 카드를 만든다. LLM 없이 정해진 규칙으로만.
+"""분석기 (코드판): 순위에 든 레포의 README를 읽어 카드를 만든다. LLM 없이 정해진 규칙으로만.
 
 CronJob이 매시 20분(수집 20분 뒤)에 돌린다. 결과는 방식 이름과 함께 쌓아서, 나중에 붙일 AI판(#19)과
-같은 README로 나란히 비교한다. 규칙을 고치면 METHOD를 code-v2로 올린다 (기준선이 흔들리지 않게).
+같은 README로 나란히 비교한다. 규칙을 고치면 METHOD를 올린다 (예전 결과는 그대로 남는다).
+AI판과 비교할 기준선은 AI를 붙이기 직전의 코드판 버전이다.
 """
 import base64
 import json
@@ -17,7 +18,9 @@ from sqlalchemy.dialects.postgresql import insert
 from banjjak import db
 from banjjak.trending import trending
 
-METHOD = "code-v1"
+# code-v1 → code-v2 (2026-10-21): 운영 첫 분석 50개에서 본 알아둘 점 오탐(부정문 · 보안 신고 안내 ·
+# "proprietary" · 목차 링크)을 걸렀다
+METHOD = "code-v2"
 RANKED = 50                      # 화면에 보이는 순위만 분석한다
 RECHECK = timedelta(days=1)      # README가 바뀌었나는 하루 한 번까지만 본다
 MAX_README = 300_000             # 아주 긴 README는 앞부분만 저장 · 분석한다
@@ -150,23 +153,31 @@ def extract_usage(readme):
     return None
 
 
-# 알아둘 점: 이런 말이 든 README 문장을 그대로 인용한다 (뜻 판단은 #19의 AI 몫)
+# 알아둘 점: 이런 말이 든 README 문장을 그대로 인용한다. (종류, 이름, 찾을 말, 걸러낼 말)
+# 걸러내기는 코드가 할 수 있는 만큼만: 부정문 · 신고 안내. 뜻 판단("기본으로 켜져 있나")은 #19의 AI 몫
 NOTE_KINDS = [
     ("telemetry", "사용 기록 전송",
-     re.compile(r"telemetry|analytics|usage (data|statistics|stats)|anonymous(ly)? (usage|data)|opt[- ]out", re.I)),
+     re.compile(r"telemetry|analytics|usage (data|statistics|stats)|anonymous(ly)? (usage|data)|opt[- ]out", re.I),
+     re.compile(r"\b(no|not|never|without|zero|disables?|disabled)\b", re.I)),          # "No telemetry"는 경고가 아니다
     ("limits", "무료 한도 · 요금",
-     re.compile(r"free tier|free plan|rate[- ]limit|quota|pricing|paid plan|subscription|requires? an? api key", re.I)),
+     re.compile(r"free tier|free plan|rate[- ]limit|quota|pricing|paid plan|subscription|requires? an? api key", re.I),
+     None),
     ("license", "라이선스 제약",
-     re.compile(r"non-?commercial|commercial use|\bagpl|proprietary|all rights reserved|personal use only|"
-                r"source[- ]available", re.I)),
-    ("security", "보안", re.compile(r"security (fix|patch|advisory|issue)|vulnerabilit|\bcve-\d", re.I)),
+     re.compile(r"non-?commercial|commercial use|\bagpl|all rights reserved|personal use only|source[- ]available",
+                re.I),
+     None),
+    ("security", "보안",
+     re.compile(r"security (fix|patch|advisory|update)|vulnerabilit(y|ies) (in|fixed)|\bcve-\d|patched", re.I),
+     re.compile(r"report|security\.md|bug bount|disclos", re.I)),                       # 신고 안내는 어느 레포에나 있다
     ("maturity", "아직 실험 단계",
      re.compile(r"\bexperimental\b|\balpha\b|early (preview|access)|not (yet )?(ready )?for production|"
-                r"not production[- ]ready|use at your own risk|work in progress|breaking changes", re.I)),
+                r"not production[- ]ready|use at your own risk|work in progress|breaking changes", re.I),
+     None),
 ]
-NOTE_NAMES = {kind: name for kind, name, _ in NOTE_KINDS}
+NOTE_NAMES = {kind: name for kind, name, _, _ in NOTE_KINDS}
 _SENTENCE_END = re.compile(r"(?<=[.!?。])\s+")
 _LIST_MARK = re.compile(r"^\s*(?:[-*+>]|\d+[.)])\s+")
+_ONLY_LINK = re.compile(r"^\[[^\]]+\]\([^)]+\)$")     # 목차 링크 한 줄
 
 
 def extract_notes(readme):
@@ -177,9 +188,11 @@ def extract_notes(readme):
         if kind != "text" or heading or not text or text[0] in "|<!" or text.startswith("[!["):
             continue
         text = _LIST_MARK.sub("", text)
+        if _ONLY_LINK.match(text):
+            continue
         for sentence in _SENTENCE_END.split(text):
-            for note_kind, _, pattern in NOTE_KINDS:
-                if note_kind not in seen and pattern.search(sentence):
+            for note_kind, _, pattern, skip in NOTE_KINDS:
+                if note_kind not in seen and pattern.search(sentence) and not (skip and skip.search(sentence)):
                     seen.add(note_kind)
                     notes.append({"kind": note_kind, "quote": sentence.strip()[:400]})
     return notes
