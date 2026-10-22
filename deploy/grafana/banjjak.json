@@ -28,7 +28,7 @@
       "gridPos": {"x": 15, "y": 0, "w": 9, "h": 6},
       "datasource": {"type": "prometheus", "uid": "prom"},
       "targets": [{"refId": "A", "legendFormat": "5xx",
-        "expr": "sum(rate(banjjak_http_request_duration_seconds_count{route=~\"/|/api/trending\", status=~\"5..\"}[5m])) / sum(rate(banjjak_http_request_duration_seconds_count{route=~\"/|/api/trending\"}[5m]))"}],
+        "expr": "(sum(rate(banjjak_http_request_duration_seconds_count{route=~\"/|/api/trending\", status=~\"5..\"}[5m])) or vector(0)) / sum(rate(banjjak_http_request_duration_seconds_count{route=~\"/|/api/trending\"}[5m]))"}],
       "fieldConfig": {"defaults": {"noValue": "화면 요청 없음", "unit": "percentunit", "custom": {"thresholdsStyle": {"mode": "line"}},
         "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.05}]}}, "overrides": []}
     },
@@ -47,6 +47,14 @@
       "targets": [{"refId": "A", "legendFormat": "{{route}} {{status}}",
         "expr": "sum by (route, status) (rate(banjjak_http_request_duration_seconds_count[5m]))"}],
       "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []}
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "화면 요청: 합성(운영 VM 프로브) / 실제",
+      "gridPos": {"x": 0, "y": 13, "w": 24, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [{"refId": "A", "legendFormat": "{{source}}",
+        "expr": "sum by (source) (rate(banjjak_http_request_duration_seconds_count{route=~\"/|/api/trending\"}[5m]))"}],
+      "fieldConfig": {"defaults": {"unit": "reqps", "noValue": "화면 요청 없음"}, "overrides": []}
     }
   ]
 }

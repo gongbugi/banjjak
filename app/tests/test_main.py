@@ -6,6 +6,7 @@ from prometheus_client import REGISTRY, generate_latest
 from banjjak import db
 from banjjak.collect import collect_once
 from banjjak.main import app
+from banjjak.probe import USER_AGENT as PROBE_AGENT
 
 client = TestClient(app)
 
@@ -24,9 +25,19 @@ def test_metrics_not_on_public_app():
     assert "python_info" in generate_latest(REGISTRY).decode()
 
 
-def _latency_bucket(route, status, le):
+def _latency_bucket(route, status, le, source="user"):
     return REGISTRY.get_sample_value("banjjak_http_request_duration_seconds_bucket",
-                                     {"route": route, "method": "GET", "status": status, "le": le})
+                                     {"route": route, "method": "GET", "status": status, "source": source, "le": le})
+
+
+def test_probe_requests_are_counted_apart_from_users():
+    # 운영 VM의 합성 요청과 실제 사용자를 지표에서 나눠 본다 (SLI 규칙은 둘을 합쳐 본다)
+    probe0 = _latency_bucket("/api/trending", "200", "+Inf", "probe") or 0
+    user0 = _latency_bucket("/api/trending", "200", "+Inf", "user") or 0
+    client.get("/api/trending", headers={"User-Agent": PROBE_AGENT})
+    client.get("/api/trending", headers={"User-Agent": "Mozilla/5.0"})
+    assert _latency_bucket("/api/trending", "200", "+Inf", "probe") == probe0 + 1
+    assert _latency_bucket("/api/trending", "200", "+Inf", "user") == user0 + 1
 
 
 def test_request_latency_has_half_second_bucket():

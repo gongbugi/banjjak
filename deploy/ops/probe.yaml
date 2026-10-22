@@ -1,0 +1,32 @@
+# 합성 요청: 10초마다 사용자 화면(/ · /api/trending)을 번갈아 부른다. 사람이 거의 없어도 웹 SLI가 잡히게
+# (2026-10-22 실측: 5분 창의 77%가 사용자 요청 0건 → 5xx 비율 · p95 경보가 울릴 수 없었다)
+# 운영 VM에서 앱 VM 공인 IP로 → 방화벽 · 입구(Traefik)까지 사용자와 같은 길. 웹은 User-Agent로 합성/실제를 나눠 센다
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: probe
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: probe}
+  template:
+    metadata:
+      labels: {app: probe}
+    spec:
+      automountServiceAccountToken: false   # 클러스터 API를 쓰지 않는다
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: probe
+          image: banjjak
+          imagePullPolicy: IfNotPresent      # 태그는 커밋 SHA라 바뀌지 않는다
+          command: ["python", "-m", "banjjak.probe"]
+          env:
+            - name: PROBE_URL
+              valueFrom: {configMapKeyRef: {name: probe-target, key: url}}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 96Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true

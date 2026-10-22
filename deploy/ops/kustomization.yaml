@@ -1,11 +1,12 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# 관측 · 알림: Prometheus + Alertmanager. 클러스터별 묶음은 deploy/clusters/<context>
+# 관측 · 알림: Prometheus + Alertmanager + 합성 요청(probe). 클러스터별 묶음은 deploy/clusters/<context>
 namespace: observe
 resources:
   - namespace.yaml
   - prometheus.yaml
   - alertmanager.yaml
+  - probe.yaml
 configMapGenerator:
   - name: prometheus-config
     files: [prometheus.yml, rules.yml]
@@ -14,3 +15,10 @@ configMapGenerator:
   # 알림에 붙는 클러스터 이름. 로컬은 deploy/clusters/k3d-banjjak에서 바꾼다 (운영 AI의 ops-ai-env와 같은 값)
   - name: observe-env
     literals: [cluster=azure]
+  # 합성 요청이 부를 곳: 앱 VM 공인 IP (사용자와 같은 길). 로컬은 deploy/clusters/k3d-banjjak에서 바꾼다
+  - name: probe-target
+    literals: [url=http://20.41.96.42]
+images:
+  - name: banjjak
+    newName: ghcr.io/gongbugi/banjjak
+    newTag: latest   # 실제 배포는 deploy/apply.sh가 커밋 SHA로 고정한다

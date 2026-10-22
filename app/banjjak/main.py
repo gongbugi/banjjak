@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from banjjak import db
 from banjjak.cards import KST, attach_cards, success_ratio, weekly_tally
+from banjjak.probe import USER_AGENT as PROBE_AGENT
 from banjjak.trending import latest_capture, trending
 
 # 지표는 이 앱에 없다. banjjak.serve가 9100 포트로 따로 낸다 (공개 입구로 새지 않게)
@@ -22,8 +23,10 @@ _MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 templates.env.filters["plain"] = lambda s: _MD_LINK.sub(r"\1", s).replace("**", "").replace("`", "")
 
 # 0.5초 칸: p95 500ms 규칙이 경계에서 어림이 아니라 정확해진다
+# source: 운영 VM 합성 요청(probe)과 실제(user)를 나눠 본다. SLI 규칙은 둘을 합친다
+# ponytail: User-Agent는 누구나 흉내 낼 수 있다. 지표 라벨일 뿐이라 막지 않는다
 REQUEST_SECONDS = Histogram(
-    "banjjak_http_request_duration_seconds", "web request latency", ["route", "method", "status"],
+    "banjjak_http_request_duration_seconds", "web request latency", ["route", "method", "status", "source"],
     buckets=(0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10))
 
 
@@ -37,7 +40,8 @@ async def _observe(request: Request, call_next):
     finally:
         # 실제 주소가 아니라 경로 틀로 센다. 모르는 주소는 한 칸으로 (지표 종류가 끝없이 늘지 않게)
         route = request.scope.get("route")
-        REQUEST_SECONDS.labels(route.path if route else "unmatched", request.method, str(status)).observe(
+        source = "probe" if request.headers.get("user-agent") == PROBE_AGENT else "user"
+        REQUEST_SECONDS.labels(route.path if route else "unmatched", request.method, str(status), source).observe(
             time.perf_counter() - start)
 
 

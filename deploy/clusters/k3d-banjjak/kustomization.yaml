@@ -19,3 +19,7 @@ configMapGenerator:
     namespace: observe
     behavior: replace
     literals: [cluster=local-k3d]
+  - name: probe-target          # 로컬은 VM이 하나라 클러스터 안 입구(Traefik)로 부른다
+    namespace: observe
+    behavior: replace
+    literals: [url=http://traefik.kube-system.svc]
