@@ -8,6 +8,7 @@ resources:
   - collector.yaml
   - analyzer.yaml
   - backup.yaml
+  - opsai-access.yaml
 images:
   - name: banjjak
     newName: ghcr.io/gongbugi/banjjak
