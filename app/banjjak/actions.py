@@ -41,12 +41,13 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS records (
 
 
 class Hands(NamedTuple):
-    """조치에 쓰는 바깥: 앱 클러스터 읽기 · 쓰기, Slack, 실행 여부, 클러스터 이름."""
+    """조치에 쓰는 바깥: 앱 클러스터 읽기 · 쓰기, Slack, 실행 여부, 클러스터 이름, 버튼을 받을 수 있나."""
     kube: Callable          # path -> dict | str
     patch: Callable         # (path, body, content_type) -> dict
-    slack: Callable         # text -> None
+    slack: Callable         # text 또는 {"text", "blocks"} -> None
     mode: str               # execute · dry-run
     cluster: str
+    buttons: bool = False   # Slack 버튼 클릭이 여기로 오나 (Socket Mode 앱 토큰이 있는 한 곳만)
 
 
 def connect(path):
@@ -77,15 +78,16 @@ def plan(conn, record, now):
     return _row(conn, cur.lastrowid)
 
 
-def describe(row, mode):
+def describe(row, mode, buttons):
     """보고에 붙는 조치 한 줄."""
     if not row["action"]:
         return "조치: 없음 → 사람이 봐 주세요"
     if row["tier"] == "T2":
-        when = "승인 전에는 실행하지 않는다 (승인 버튼은 #8 2단계)"
+        when = "승인 전에는 실행하지 않는다" + ("" if buttons else " (버튼 없음: 이 클러스터에서는 승인할 길이 없다)")
     else:
         at = datetime.fromtimestamp(row["due"], KST).strftime("%H:%M")
-        when = f"5분 뒤 {'실행' if mode == 'execute' else '드라이런'} ({at} KST, 거부 버튼은 #8 2단계)"
+        answer = "그 전에 버튼으로 승인 · 거부" if buttons else "버튼 없음"
+        when = f"5분 뒤 {'실행' if mode == 'execute' else '드라이런'} ({at} KST, {answer})"
     note = f" · {row['result']}" if row["result"] else ""
     return f"조치: {ACTIONS[row['action']][1]} ({row['tier']}) · {when} · 기록 #{row['id']}{note}"
 

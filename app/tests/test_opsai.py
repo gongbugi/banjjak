@@ -5,10 +5,11 @@ from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 
 from banjjak.actions import Hands, connect, decide, tick
-from banjjak.opsai import app, handle
+from banjjak.opsai import app, handle, on_click
 
 client = TestClient(app)
 NOW = datetime(2026, 10, 21, 14, 0, tzinfo=timezone.utc)
+APPROVER = "U0APPROVER1"   # 버튼을 누를 수 있는 사람 (운영은 Secret slack-socket)
 
 
 def firing(alertname):
@@ -89,10 +90,22 @@ def cluster(*, suspend=False, collect_ok=True, collect_log="", last_success="202
 class Ops:
     """운영 AI 하나: 진짜 SQLite 파일 + 가짜 앱 클러스터(읽기 · 쓰기) · Slack. 쓰기 요청은 patched에 쌓인다."""
 
-    def __init__(self, db, kube=None, prom=None, mode="execute", cluster="azure"):
-        self.db, self.prom, self.sent, self.patched = db, prom or fake_prom(), [], []
+    def __init__(self, db, kube=None, prom=None, mode="execute", cluster="azure", buttons=True):
+        self.db, self.prom, self.sent, self.messages, self.patched = db, prom or fake_prom(), [], [], []
+        self.responses = []   # 버튼 클릭에 대한 답 (response_url로 원래 글을 바꾼다)
         self.hands = Hands(kube or fake_kube({}), lambda path, body, ctype: self.patched.append((path, body)),
-                           self.sent.append, mode, cluster)
+                           self._slack, mode, cluster, buttons)
+
+    def _slack(self, message):   # 글만 보내거나, 버튼이 있으면 {"text", "blocks"}
+        self.messages.append(message)
+        self.sent.append(message["text"] if isinstance(message, dict) else message)
+
+    def click(self, record_id, action, at, user=APPROVER, cluster="azure"):
+        payload = {"type": "block_actions", "user": {"id": user},
+                   "response_url": "https://hooks.slack.com/actions/T1/1/abc",
+                   "actions": [{"action_id": action, "value": f"{cluster}:{record_id}"}]}
+        with closing(connect(self.db)) as conn:
+            on_click(payload, at, conn, self.hands, APPROVER, lambda url, body: self.responses.append((url, body)))
 
     def alert(self, alertname, at=NOW):
         with closing(connect(self.db)) as conn:
@@ -382,6 +395,94 @@ def test_traffic_surge_scales_web_to_two(tmp_path):
     assert ops.alert("WebLatencyP95High")["action"] == "scale_web"
     ops.tick(NOW + timedelta(minutes=5))
     assert ops.patched == [(f"/apis/apps/v1{NS}/deployments/web/scale", {"spec": {"replicas": 2}})]
+
+
+# --- Slack 버튼 (#8 2단계): 기다리는 조치에만 승인 · 거부 버튼. 누를 수 있는 사람은 승인자 한 명 ---
+
+def buttons(message):
+    blocks = message.get("blocks", []) if isinstance(message, dict) else []   # 버튼 없는 글은 문자열
+    return [(e["action_id"], e["value"]) for b in blocks if b["type"] == "actions" for e in b["elements"]]
+
+
+def test_waiting_action_report_has_approve_and_reject_buttons(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
+    record = ops.alert("DataStale")
+    value = f"azure:{record['id']}"   # 어느 클러스터의 몇 번 기록인지
+    assert buttons(ops.messages[0]) == [("approve", value), ("reject", value)]
+    assert "수집기 CronJob 재개" in ops.sent[0]   # 버튼이 붙어도 글은 그대로 (알림 미리보기에 쓰인다)
+
+
+# 로컬 · Azure가 같은 채널에 보내고, 클릭은 앱 토큰으로 연결한 한 곳(Azure)에만 간다
+def test_no_buttons_where_clicks_cannot_arrive(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), cluster="local-k3d", buttons=False)
+    ops.alert("DataStale")
+    assert buttons(ops.messages[0]) == []
+    assert "버튼 없음" in ops.sent[0]
+
+
+def test_a_click_meant_for_another_cluster_changes_nothing(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
+    record = ops.alert("DataStale")
+    ops.click(record["id"], "approve", NOW + timedelta(minutes=1), cluster="local-k3d")   # 같은 번호, 다른 곳의 기록
+    assert ops.patched == [] and ops.states() == [("resume_collector", "T1", "waiting")]
+    assert "다른 클러스터" in ops.responses[-1][1]["text"]
+
+
+def test_report_without_an_action_has_no_buttons(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(collect_ok=False)))
+    ops.alert("DataStale")
+    assert buttons(ops.messages[0]) == []
+
+
+def test_approve_button_runs_it_now(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
+    record = ops.alert("DataStale")
+    ops.click(record["id"], "approve", NOW + timedelta(minutes=1))
+    assert ops.patched == [(COLLECTOR, {"spec": {"suspend": False}})]   # 5분을 기다리지 않는다
+    assert ops.states() == [("resume_collector", "T1", "executed")]
+    url, body = ops.responses[-1]
+    assert body["replace_original"] is True and "blocks" not in body   # 버튼을 지운 글로 바꾼다
+    assert "승인" in body["text"] and "실행" in body["text"]
+    ops.tick(NOW + timedelta(minutes=5))
+    assert len(ops.patched) == 1   # 5분이 지나도 두 번 하지 않는다
+
+
+def test_reject_button_stops_it(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
+    record = ops.alert("DataStale")
+    ops.click(record["id"], "reject", NOW + timedelta(minutes=1))
+    ops.tick(NOW + timedelta(minutes=5))
+    assert ops.patched == [] and ops.states() == [("resume_collector", "T1", "rejected")]
+    assert "거부" in ops.responses[-1][1]["text"]
+
+
+def test_t2_runs_only_after_approval(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
+    for minutes in (0, 10):   # 같은 조치 두 번 → 세 번째는 T2
+        ops.alert("DataStale", at=NOW + timedelta(minutes=minutes))
+        ops.tick(NOW + timedelta(minutes=minutes + 5))
+    third = ops.alert("DataStale", at=NOW + timedelta(minutes=20))
+    assert third["tier"] == "T2" and buttons(ops.messages[-1])
+    ops.click(third["id"], "approve", NOW + timedelta(minutes=30))
+    assert len(ops.patched) == 3 and ops.states()[-1] == ("resume_collector", "T2", "executed")
+
+
+def test_only_the_approver_can_press(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
+    record = ops.alert("DataStale")
+    ops.click(record["id"], "approve", NOW + timedelta(minutes=1), user="U0SOMEONE99")
+    assert ops.patched == [] and ops.states() == [("resume_collector", "T1", "waiting")]
+    url, body = ops.responses[-1]
+    assert body.get("replace_original") is False and body["response_type"] == "ephemeral"   # 누른 사람에게만 보인다
+
+
+def test_pressing_a_finished_action_changes_nothing(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
+    record = ops.alert("DataStale")
+    ops.tick(NOW + timedelta(minutes=5))   # 5분 무응답으로 이미 실행됐다
+    ops.click(record["id"], "reject", NOW + timedelta(minutes=6))
+    assert ops.states() == [("resume_collector", "T1", "executed")]
+    assert "이미 끝난 조치" in ops.responses[-1][1]["text"]
 
 
 # Alertmanager webhook 본문 (필요한 칸만)

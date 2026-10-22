@@ -51,6 +51,12 @@ spec:
               value: http://prometheus.observe.svc:9090
             - name: SLACK_WEBHOOK_URL      # 진단 보고. 없으면 기록만 한다 (알림 자체는 Alertmanager가 따로 보낸다)
               valueFrom: {secretKeyRef: {name: slack-webhook, key: url, optional: true}}
+            # Slack 승인 · 거부 버튼 (Socket Mode). 클릭은 연결 한 곳에만 가므로 Secret slack-socket은 운영 VM에만 둔다
+            # (infra/azure/slack-socket.ps1). 없으면(로컬) 버튼 없이 돈다
+            - name: SLACK_APP_TOKEN
+              valueFrom: {secretKeyRef: {name: slack-socket, key: app_token, optional: true}}
+            - name: SLACK_APPROVER         # 버튼을 누를 수 있는 사람 (Slack 멤버 ID). 없으면 아무도 못 누른다
+              valueFrom: {secretKeyRef: {name: slack-socket, key: approver, optional: true}}
           volumeMounts:
             - {name: app-cluster, mountPath: /etc/app-cluster, readOnly: true}
             - {name: data, mountPath: /data}

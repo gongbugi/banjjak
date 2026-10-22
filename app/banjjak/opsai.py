@@ -45,15 +45,54 @@ def handle(alert, prom, now, conn, hands):
               "severity": severity, **checklist.diagnose(kind, hands.kube, prom, now)}
     print(json.dumps(record, ensure_ascii=False), flush=True)
     row = actions.plan(conn, record, now)   # 판단 기록도 이 행(diagnosis 칸)에 남는다 → #12 채점이 읽는다
-    hands.slack(report(record, row, hands.mode))
+    hands.slack(message(report(record, row, hands), row, hands))
     return {**record, **{k: row[k] for k in ("id", "action", "tier", "state")}}
 
 
-def report(r, row, mode):
+def message(text, row, hands):
+    """기다리는 조치면 글 아래에 승인 · 거부 버튼을 붙인다. 클릭을 받을 수 없는 곳(앱 토큰 없음)은 글만.
+    버튼 값은 "클러스터:기록 번호": 로컬 · Azure가 같은 채널에 보내므로, 번호만으로는 어느 DB의 기록인지 모른다."""
+    if row["state"] != "waiting" or not hands.buttons:
+        return text
+    value = f"{hands.cluster}:{row['id']}"
+    button = lambda action_id, label, style: {"type": "button", "action_id": action_id, "value": value,
+                                               "style": style, "text": {"type": "plain_text", "text": label}}
+    now_label = "승인 (지금 실행)" if hands.mode == "execute" else "승인 (지금 드라이런)"
+    return {"text": text, "blocks": [
+        {"type": "section", "text": {"type": "mrkdwn", "text": text[:2900]}},   # section 글은 3000자까지
+        {"type": "actions", "elements": [button("approve", now_label, "primary"), button("reject", "거부", "danger")]},
+    ]}
+
+
+def on_click(payload, now, conn, hands, approver, respond):
+    """Slack 버튼 1번. 승인자만 누를 수 있다. 승인은 지금 실행(T1 · T2), 거부는 실행하지 않는다.
+    respond(response_url, body): 원래 글을 버튼 없는 글로 바꾸거나, 누른 사람에게만 보이는 답을 보낸다."""
+    url, user = payload["response_url"], payload.get("user", {}).get("id")
+    clicked = payload["actions"][0]
+    cluster, _, record_id = clicked["value"].rpartition(":")
+    record_id = int(record_id)
+    if not approver or user != approver:
+        return respond(url, {"response_type": "ephemeral", "replace_original": False,
+                             "text": "이 버튼은 승인자만 누를 수 있다"})
+    if cluster != hands.cluster:   # 같은 번호의 다른 기록을 건드리지 않는다
+        return respond(url, {"response_type": "ephemeral", "replace_original": False,
+                             "text": f"다른 클러스터({cluster or '모름'})의 버튼이라 여기({hands.cluster})서는 처리하지 않는다"})
+    row = actions.decide(conn, record_id, clicked["action_id"] == "approve", now, hands, by="Slack 버튼")
+    if row is None:   # 5분 무응답으로 이미 실행됐거나 이미 누른 버튼
+        state = conn.execute("SELECT state FROM records WHERE id = ?", (record_id,)).fetchone()
+        return respond(url, {"response_type": "ephemeral", "replace_original": False,
+                             "text": f"기록 #{record_id}: 이미 끝난 조치 ({state[0] if state else '없음'})"})
+    verdict = "승인" if clicked["action_id"] == "approve" else "거부"
+    done = f"{verdict}: {actions.ICON[row['state']]} · 기록 #{row['id']} {actions.ACTIONS[row['action']][1]} · {row['result']}"
+    original = payload.get("message", {}).get("text", "")
+    return respond(url, {"replace_original": True, "text": f"{original}\n\n{done}" if original else done})
+
+
+def report(r, row, hands):
     lines = [f"🩺 운영 AI 진단 [{r['cluster']}] · {r['alertname']} ({r['sli'] or 'SLI 모름'} · {r['severity']})",
              f"판단: {r['verdict'] or '판단 못 함 → 사람이 봐 주세요'}", "본 것:"]
     lines += [f"• {e['look']}: {e['saw']}" for e in r["evidence"]]
-    lines.append(actions.describe(row, mode))
+    lines.append(actions.describe(row, hands.mode, hands.buttons))
     return "\n".join(lines)
 
 
@@ -90,21 +129,59 @@ def _prom(query):
     return float(result[0]["value"][1]) if result else None
 
 
-def _slack(text):
+def _slack(message):
+    """글(str) 또는 버튼 붙은 글({"text", "blocks"})을 Incoming Webhook으로 보낸다."""
     url = os.environ.get("SLACK_WEBHOOK_URL")   # Secret slack-webhook. 없으면(로컬 · 시험) 기록만 한다
     if not url:
         return
-    req = urllib.request.Request(url, data=json.dumps({"text": text}).encode(), headers={"Content-Type": "application/json"})
+    _post(url, message if isinstance(message, dict) else {"text": message})
+
+
+def _respond(url, body):
+    # 클릭에 딸려 온 response_url로만 답한다 (Slack 주소가 아니면 보내지 않는다)
+    if not url.startswith("https://hooks.slack.com/"):
+        raise ValueError(f"Slack response_url이 아니다: {url[:40]}")
+    _post(url, body)
+
+
+def _post(url, body):
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     try:
         urllib.request.urlopen(req, timeout=10).close()
     except Exception as e:   # 보고가 실패해도 기록은 남았다
         print(f"slack failed: {e}", flush=True)
 
 
+def _buttons():
+    """Slack 버튼을 Socket Mode로 받는다 (밖으로만 연결, 받는 주소를 열지 않는다).
+    연결이 여러 개면 클릭이 그중 하나에만 간다 → 앱 토큰(Secret slack-socket)은 운영 VM 한 곳에만 둔다. 없으면 버튼 없이 돈다."""
+    token = os.environ.get("SLACK_APP_TOKEN")
+    if not token:
+        return None
+    from slack_sdk.socket_mode import SocketModeClient   # 버튼을 켠 곳에서만 쓴다
+    from slack_sdk.socket_mode.response import SocketModeResponse
+
+    def listener(client, req):
+        client.send_socket_mode_response(SocketModeResponse(envelope_id=req.envelope_id))   # 3초 안에 받았다고 답한다
+        if req.type == "interactive" and req.payload.get("type") == "block_actions":
+            try:
+                with _db() as conn:
+                    on_click(req.payload, datetime.now(timezone.utc), conn, _hands(), os.environ.get("SLACK_APPROVER", ""),
+                             _respond)
+            except Exception as e:
+                print(f"button failed: {type(e).__name__}: {e}", flush=True)
+
+    client = SocketModeClient(app_token=token)
+    client.socket_mode_request_listeners.append(listener)
+    client.connect()
+    print("slack buttons: connected (socket mode)", flush=True)
+    return client
+
+
 def _hands():
     # 실행 여부는 클러스터마다 (ConfigMap ops-ai-env). 값이 없으면 안전한 쪽(dry-run)
     return actions.Hands(_kube, _patch, _slack, os.environ.get("ACTIONS", "dry-run"),
-                         os.environ.get("CLUSTER_NAME", "unknown"))
+                         os.environ.get("CLUSTER_NAME", "unknown"), bool(os.environ.get("SLACK_APP_TOKEN")))
 
 
 def _db():
@@ -143,9 +220,16 @@ async def lifespan(app):
     tasks = [asyncio.create_task(_tick_loop())]
     if os.environ.get("HEARTBEAT_URL"):
         tasks.append(asyncio.create_task(_beat()))
+    try:
+        buttons = await asyncio.to_thread(_buttons)
+    except Exception as e:   # 버튼이 안 돼도 진단 · 5분 무응답 실행은 돈다
+        print(f"slack buttons failed: {type(e).__name__}: {e}", flush=True)
+        buttons = None
     yield
     for t in tasks:
         t.cancel()
+    if buttons:
+        buttons.close()
 
 
 app = FastAPI(title="banjjak-ops-ai", lifespan=lifespan)
