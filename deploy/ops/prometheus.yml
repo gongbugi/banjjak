@@ -2,6 +2,10 @@
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+  # Alertmanager로 가는 알림에 붙는다 → Slack 제목의 [azure] · [local-k3d]. 값은 환경 변수 (Prometheus 3이 펼친다)
+  # 이름이 cluster가 아닌 것은 앱 지표에 이미 cluster=app이 붙어 있어서다
+  external_labels:
+    site: ${CLUSTER_NAME}
 
 rule_files: [rules.yml]
 

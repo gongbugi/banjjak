@@ -10,4 +10,7 @@ configMapGenerator:
   - name: prometheus-config
     files: [prometheus.yml, rules.yml]
   - name: alertmanager-config
-    files: [alertmanager.yml]
+    files: [alertmanager.yml, slack.tmpl]
+  # 알림에 붙는 클러스터 이름. 로컬은 deploy/clusters/k3d-banjjak에서 바꾼다 (운영 AI의 ops-ai-env와 같은 값)
+  - name: observe-env
+    literals: [cluster=azure]

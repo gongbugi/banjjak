@@ -1,0 +1,19 @@
+{
+  "receiver": "slack",
+  "status": "resolved",
+  "alerts": [
+    {
+      "status": "resolved",
+      "labels": {"alertname": "DataStale", "site": "local-k3d"},
+      "annotations": {"summary": "마지막 수집 기록이 2시간보다 오래됐다"},
+      "startsAt": "2026-10-22T05:58:00Z",
+      "endsAt": "2026-10-22T06:28:00Z",
+      "generatorURL": "",
+      "fingerprint": "a1"
+    }
+  ],
+  "groupLabels": {"alertname": "DataStale"},
+  "commonLabels": {"alertname": "DataStale", "site": "local-k3d"},
+  "commonAnnotations": {"summary": "마지막 수집 기록이 2시간보다 오래됐다"},
+  "externalURL": "http://alertmanager:9093"
+}

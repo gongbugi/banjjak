@@ -32,6 +32,9 @@ spec:
             - --storage.tsdb.path=/prometheus
             - --storage.tsdb.retention.time=60d       # 운영 한 달 + 정리하는 동안
             - --web.enable-remote-write-receiver      # 앱 클러스터 에이전트가 여기로 보낸다
+          env:
+            - name: CLUSTER_NAME                      # external_labels의 site (azure · local-k3d)
+              valueFrom: {configMapKeyRef: {name: observe-env, key: cluster}}
           ports:
             - containerPort: 9090
           readinessProbe:

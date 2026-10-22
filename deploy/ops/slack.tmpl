@@ -1,0 +1,2 @@
+{{/* Slack 제목. site는 운영 Prometheus의 external_labels (azure · local-k3d): 둘이 같은 채널에 보내므로 어디서 왔는지 밝힌다 */}}
+{{ define "banjjak.slack.title" }}{{ if eq .Status "firing" }}🔴 울림{{ else }}🟢 풀림{{ end }} [{{ or .CommonLabels.site "?" }}] · {{ .CommonLabels.alertname }}{{ end }}

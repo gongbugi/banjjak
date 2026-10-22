@@ -15,3 +15,7 @@ configMapGenerator:
     namespace: ops-ai
     behavior: replace
     literals: [cluster=local-k3d]
+  - name: observe-env
+    namespace: observe
+    behavior: replace
+    literals: [cluster=local-k3d]

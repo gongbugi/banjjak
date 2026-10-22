@@ -45,6 +45,12 @@ jobs:
             amtool config routes test --config.file=ops/alertmanager.yml --verify.receivers=slack,ops-ai alertname=$a
           done
           amtool config routes test --config.file=ops/alertmanager.yml --verify.receivers=watchdog alertname=Watchdog
+      # Slack 제목에 어느 클러스터인지 밝힌다 (로컬 k3d와 Azure가 같은 채널에 보낸다). 값은 Prometheus external_labels의 site
+      - run: |
+          amtool() { docker run --rm -v "$PWD/deploy:/d" -w /d --entrypoint amtool prom/alertmanager:v0.34.1 "$@"; }
+          title() { amtool template render --template.glob=/d/ops/slack.tmpl --template.text='{{ template "banjjak.slack.title" . }}' --template.data="/d/ops/$1"; }
+          got=$(title slack_test_firing.json);   echo "$got"; test "$got" = "🔴 울림 [azure] · DataStale"
+          got=$(title slack_test_resolved.json); echo "$got"; test "$got" = "🟢 풀림 [local-k3d] · DataStale"
 
   image:
     needs: [test, rules]
