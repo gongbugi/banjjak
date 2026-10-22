@@ -4,8 +4,9 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
-from banjjak.actions import Hands, connect, decide, tick
+from banjjak.actions import Hands, connect, decide
 from banjjak.opsai import app, handle, on_click
+from banjjak.opsai import tick as ops_tick
 
 client = TestClient(app)
 NOW = datetime(2026, 10, 21, 14, 0, tzinfo=timezone.utc)
@@ -94,7 +95,7 @@ class Ops:
         self.db, self.prom, self.sent, self.messages, self.patched = db, prom or fake_prom(), [], [], []
         self.responses = []   # 버튼 클릭에 대한 답 (response_url로 원래 글을 바꾼다)
         self.hands = Hands(kube or fake_kube({}), lambda path, body, ctype: self.patched.append((path, body)),
-                           self._slack, mode, cluster, buttons)
+                           self._slack, mode, cluster, buttons, self.prom)
 
     def _slack(self, message):   # 글만 보내거나, 버튼이 있으면 {"text", "blocks"}
         self.messages.append(message)
@@ -113,7 +114,11 @@ class Ops:
 
     def tick(self, at):
         with closing(connect(self.db)) as conn:   # 매번 새 연결 = 파드가 바뀌어도 DB에서 이어받는다
-            tick(conn, at, self.hands)
+            ops_tick(conn, at, self.hands)   # 5분 기다린 T1 실행 + 실행한 조치 확인
+
+    def checks(self):
+        with closing(connect(self.db)) as conn:
+            return [(r["record_id"], r["state"]) for r in conn.execute("SELECT * FROM checks ORDER BY record_id")]
 
     def decide(self, record_id, approve, at):
         with closing(connect(self.db)) as conn:
@@ -341,7 +346,7 @@ def test_same_action_more_than_twice_an_hour_goes_up_a_tier(tmp_path):
         ops.tick(NOW + timedelta(minutes=minutes + 5))
     assert ops.states() == [("resume_collector", "T1", "executed"), ("resume_collector", "T1", "executed"),
                             ("resume_collector", "T2", "waiting")]
-    assert "1시간에 3번째 → T2로 올림" in ops.sent[-1]
+    assert any("1시간에 3번째 → T2로 올림" in s for s in ops.sent)   # 그 뒤 확인 결과 글이 더 온다
     ops.tick(NOW + timedelta(hours=2))
     assert len(ops.patched) == 2
 
@@ -395,6 +400,129 @@ def test_traffic_surge_scales_web_to_two(tmp_path):
     assert ops.alert("WebLatencyP95High")["action"] == "scale_web"
     ops.tick(NOW + timedelta(minutes=5))
     assert ops.patched == [(f"/apis/apps/v1{NS}/deployments/web/scale", {"spec": {"replicas": 2}})]
+
+
+# --- 확인 (#9): 실행한 조치 뒤 경보가 풀렸나 · 안 풀리면 재진단 1회 · 악화면 바로 사람 ---
+
+class Prom:
+    """가짜 운영 Prometheus. 값을 바꿔 가며 시간의 흐름을 흉내 낸다.
+    alert: 이 경보가 울리는 중이면 1, 풀렸으면 None · err: 화면 요청 5xx 비율 · p95: 초 · rps: 초당 요청(지금, 1시간 전)"""
+
+    def __init__(self, alert=1.0, err=0.0, p95=0.1, rps=(None, None)):
+        self.alert, self.err, self.p95, self.rps = alert, err, p95, rps
+
+    def __call__(self, q):
+        if q.startswith("ALERTS"):
+            return self.alert
+        if "histogram_quantile" in q:
+            return self.p95
+        if '5..' in q:
+            return self.err
+        if "duration_seconds_count" in q:
+            return self.rps[1] if "offset 1h" in q else self.rps[0]
+        return None
+
+
+def executed_resume(tmp_path, prom, **kw):
+    """수집기 멈춤 → 수집기 재개(T1) → 5분 뒤 실행까지 마친 운영 AI. 실행 시각은 NOW+5분."""
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), prom, **kw)
+    ops.alert("DataStale")
+    ops.tick(NOW + timedelta(minutes=5))
+    return ops
+
+
+def test_recovered_when_the_alert_clears(tmp_path):
+    prom = Prom(alert=1.0)
+    ops = executed_resume(tmp_path, prom)
+    assert ops.checks() == [(1, "checking")]
+    prom.alert = None   # 경보가 풀렸다
+    ops.tick(NOW + timedelta(minutes=7))   # 첫 확인은 실행 2분 뒤
+    assert ops.checks() == [(1, "recovered")]
+    assert "✅ 회복" in ops.sent[-1] and "2분 뒤 경보 풀림" in ops.sent[-1]
+
+
+def test_not_recovered_leads_to_one_rediagnosis(tmp_path):
+    # 레플리카를 늘렸는데 10분 안에 안 풀렸고, 그사이 새 배포가 보인다 → 재진단은 다른 조치(롤백)를 고른다
+    prom = Prom(alert=1.0, rps=(6.0, 0.4))
+    state = cluster()
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(state), prom)
+    assert ops.alert("WebLatencyP95High")["action"] == "scale_web"
+    ops.tick(NOW + timedelta(minutes=5))   # 실행
+    state[f"/apis/apps/v1{NS}/deployments/web"]["status"]["conditions"][1]["lastUpdateTime"] = "2026-10-21T14:10:00Z"
+    ops.tick(NOW + timedelta(minutes=14))
+    assert ops.checks() == [(1, "checking")]   # 아직 확인 시간 안
+    ops.tick(NOW + timedelta(minutes=15))   # 실행 10분 뒤에도 울린다
+    assert ops.checks() == [(1, "not_recovered")]
+    assert any("🔁 안 먹힘 → 재진단" in s for s in ops.sent)
+    assert ops.states()[-1] == ("rollback_web", "T1", "waiting")   # 재진단 기록
+    assert "앞선 조치: 기록 #1 웹 레플리카를 2개로" in ops.sent[-1]
+
+
+def test_a_rediagnosed_action_that_also_fails_goes_to_a_human(tmp_path):
+    prom = Prom(alert=1.0, rps=(6.0, 0.4))
+    state = cluster()
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(state), prom)
+    ops.alert("WebLatencyP95High")
+    ops.tick(NOW + timedelta(minutes=5))
+    state[f"/apis/apps/v1{NS}/deployments/web"]["status"]["conditions"][1]["lastUpdateTime"] = "2026-10-21T14:10:00Z"
+    ops.tick(NOW + timedelta(minutes=15))   # 재진단 → 롤백 대기
+    ops.tick(NOW + timedelta(minutes=20))   # 롤백 실행
+    ops.tick(NOW + timedelta(minutes=30))   # 롤백 10분 뒤에도 울린다
+    assert ops.checks() == [(1, "not_recovered"), (2, "not_recovered")]
+    assert "재진단한 조치도 안 먹힘 → 사람이 봐 주세요" in ops.sent[-1]
+    assert len(ops.states()) == 2   # 재진단은 한 번뿐
+
+
+def test_rediagnosis_choosing_the_same_action_goes_to_a_human(tmp_path):
+    prom = Prom(alert=1.0)
+    ops = executed_resume(tmp_path, prom)   # 가짜 클러스터는 계속 "수집기 멈춤"이라고 답한다
+    ops.tick(NOW + timedelta(minutes=75))   # 수집기 재개 확인 시간 70분이 지났다
+    assert ops.states()[-1] == (None, None, "human")
+    assert "재진단도 같은 조치(수집기 CronJob 재개)를 고른다" in ops.sent[-1]
+
+
+def test_worse_goes_to_a_human_without_rediagnosis(tmp_path):
+    prom = Prom(alert=1.0, err=0.01, p95=0.2)
+    ops = executed_resume(tmp_path, prom)
+    prom.err = 0.05   # 조치 직전 1% → 5% (1.5배 이상이면서 2% 이상)
+    ops.tick(NOW + timedelta(minutes=7))   # 첫 확인: 유예
+    assert ops.checks() == [(1, "checking")]
+    ops.tick(NOW + timedelta(minutes=8))
+    assert ops.checks() == [(1, "worse")]
+    assert "🚨 악화 → 사람이 봐 주세요" in ops.sent[-1] and "오류율 1.0% → 5.0%" in ops.sent[-1]
+    assert len(ops.states()) == 1   # 재진단하지 않는다
+
+
+def test_first_check_is_not_judged_for_worsening(tmp_path):
+    prom = Prom(alert=1.0, err=0.0, p95=0.2)
+    ops = executed_resume(tmp_path, prom)
+    prom.p95 = 0.4   # 교체 순간처럼 잠깐 튄다
+    ops.tick(NOW + timedelta(minutes=7))
+    prom.p95 = 0.2
+    ops.tick(NOW + timedelta(minutes=8))
+    assert ops.checks() == [(1, "checking")]
+
+
+def test_dry_run_is_not_checked(tmp_path):
+    ops = executed_resume(tmp_path, Prom(alert=1.0), mode="dry-run")
+    ops.tick(NOW + timedelta(hours=3))
+    assert ops.checks() == []   # 실행하지 않았으니 확인할 것도 없다
+    assert len(ops.states()) == 1
+
+
+def test_resumed_analyzer_counts_as_recovered_when_its_next_job_succeeds(tmp_path):
+    # 분석 성공률은 24시간 비율이라 재개만으로는 경보가 한참 안 풀린다 → 다음 분석 Job 성공으로 본다
+    prom = Prom(alert=1.0)
+    state = cluster()
+    state[f"/apis/batch/v1{NS}/cronjobs/analyzer"]["spec"]["suspend"] = True
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(state), prom)
+    assert ops.alert("AnalysisSuccessLow")["action"] == "resume_analyzer"
+    ops.tick(NOW + timedelta(minutes=5))
+    ops.tick(NOW + timedelta(minutes=7))
+    assert ops.checks() == [(1, "checking")]   # 실행 뒤 새 Job이 아직 없다
+    state[f"/apis/batch/v1{NS}/jobs"]["items"].append(job("analyzer-10", "analyzer", True, "2026-10-21T14:20:00Z"))
+    ops.tick(NOW + timedelta(minutes=30))
+    assert ops.checks() == [(1, "recovered")]
 
 
 # --- Slack 버튼 (#8 2단계): 기다리는 조치에만 승인 · 거부 버튼. 누를 수 있는 사람은 승인자 한 명 ---

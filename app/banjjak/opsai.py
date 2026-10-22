@@ -21,7 +21,7 @@ from banjjak import actions, checklist
 from banjjak.heartbeat import ping
 
 BEAT_EVERY = 60   # 초. Better Stack에는 더 긴 간격으로 걸어 한두 번 빠져도 버틴다
-TICK_EVERY = 15   # 초. 5분 기다린 T1을 찾는 주기
+TICK_EVERY = 15   # 초. 5분 기다린 T1 실행 · 실행한 조치 확인을 보는 주기
 APP_CLUSTER = "/etc/app-cluster"   # Secret app-cluster: url · token · ca.crt (앱 클러스터 ServiceAccount banjjak/ops-ai)
 
 # 분류는 코드다: 종류 = 알림 규칙 이름, 심각도 = 그 규칙이 지키는 SLI (목표값은 스펙 #1)
@@ -35,18 +35,35 @@ KINDS = {
 }
 
 
-def handle(alert, prom, now, conn, hands):
+def handle(alert, prom, now, conn, hands, after=None):
     """울린 알림 1건: 분류(코드) → 진단(점검표) → 조치 · 등급(표) → 기록 → Slack 보고. 실행은 tick이 5분 뒤에 한다.
-    hands.cluster: 이 운영 AI가 지키는 곳 (azure · local-k3d). 둘이 같은 Slack 채널에 보내므로 보고마다 밝힌다."""
+    hands.cluster: 이 운영 AI가 지키는 곳 (azure · local-k3d). 둘이 같은 Slack 채널에 보내므로 보고마다 밝힌다.
+    after: 재진단이면 (안 먹힌 앞선 기록, 이유). "안 먹혔다"를 첫 증거로 남기고, 같은 조치를 또 고르면 사람에게."""
     kind = alert.get("labels", {}).get("alertname")
     sli, severity = KINDS.get(kind, (None, "unknown"))
     record = {"event": "diagnosis", "cluster": hands.cluster, "at": now.isoformat(), "alertname": kind,
               "startsAt": alert.get("startsAt"), "fingerprint": alert.get("fingerprint"), "sli": sli,
               "severity": severity, **checklist.diagnose(kind, hands.kube, prom, now)}
+    if after:
+        before, reason = after
+        record["after"] = before["id"]
+        record["evidence"].insert(0, {"look": "앞선 조치",
+                                      "saw": f"기록 #{before['id']} {actions.ACTIONS[before['action']][1]} · {reason}"})
     print(json.dumps(record, ensure_ascii=False), flush=True)
-    row = actions.plan(conn, record, now)   # 판단 기록도 이 행(diagnosis 칸)에 남는다 → #12 채점이 읽는다
+    # 판단 기록도 이 행(diagnosis 칸)에 남는다 → #12 채점이 읽는다
+    row = actions.plan(conn, record, now, tried=after[0]["action"] if after else None)
     hands.slack(message(report(record, row, hands), row, hands))
     return {**record, **{k: row[k] for k in ("id", "action", "tier", "state")}}
+
+
+def tick(conn, now, hands):
+    """주기 처리: 5분 기다린 T1 실행(#8) → 실행한 조치 확인(#9) → 안 먹힌 조치는 재진단 1회."""
+    actions.tick(conn, now, hands)
+    for before, reason in actions.check(conn, now, hands):
+        diagnosis = json.loads(before["diagnosis"])
+        alert = {"labels": {"alertname": before["alertname"]}, "startsAt": diagnosis.get("startsAt"),
+                 "fingerprint": diagnosis.get("fingerprint")}
+        handle(alert, hands.prom, now, conn, hands, after=(before, reason))
 
 
 def message(text, row, hands):
@@ -185,7 +202,7 @@ def _buttons():
 def _hands():
     # 실행 여부는 클러스터마다 (ConfigMap ops-ai-env). 값이 없으면 안전한 쪽(dry-run)
     return actions.Hands(_kube, _patch, _slack, os.environ.get("ACTIONS", "dry-run"),
-                         os.environ.get("CLUSTER_NAME", "unknown"), bool(os.environ.get("SLACK_APP_TOKEN")))
+                         os.environ.get("CLUSTER_NAME", "unknown"), bool(os.environ.get("SLACK_APP_TOKEN")), _prom)
 
 
 def _db():
@@ -200,8 +217,8 @@ def _handle(alert, now):
 def _tick():
     try:
         with _db() as conn:
-            actions.tick(conn, datetime.now(timezone.utc), _hands())
-    except Exception as e:   # 한 번 실패해도 다음 주기에 다시 본다 (기다리는 조치는 DB에 그대로 있다)
+            tick(conn, datetime.now(timezone.utc), _hands())
+    except Exception as e:   # 한 번 실패해도 다음 주기에 다시 본다 (기다리는 조치 · 확인은 DB에 그대로 있다)
         print(f"tick failed: {type(e).__name__}: {e}", flush=True)
 
 
