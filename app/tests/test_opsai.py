@@ -60,23 +60,30 @@ def cluster(*, suspend=False, collect_ok=True, collect_log="", last_success="202
         f"/apis/batch/v1{NS}/cronjobs/analyzer": {
             "spec": {}, "status": {"lastScheduleTime": "2026-10-21T13:20:00Z", "lastSuccessfulTime": "2026-10-21T12:20:40Z"}},
         f"/api/v1{NS}/pods?labelSelector=job-name%3Danalyzer-9": {"items": [pod("analyzer-9-q2w", ready=False)]},
-        f"/api/v1{NS}/pods/analyzer-9-q2w/log?tailLines=5": "psycopg.errors.UndefinedColumn: column \"method\" does not exist\n",
+        f"/api/v1{NS}/pods/analyzer-9-q2w/log?tailLines=50": "psycopg.errors.UndefinedColumn: column \"method\" does not exist\n",
         f"/apis/batch/v1{NS}/jobs": {"items": [
             job("analyzer-9", "analyzer", analyze_ok, "2026-10-21T13:20:00Z"),
             job("collector-2", "collector", collect_ok, "2026-10-21T13:00:00Z"),
             job("collector-1", "collector", True, "2026-10-21T12:00:00Z"),
         ]},
         f"/api/v1{NS}/pods?labelSelector=job-name%3Dcollector-2": {"items": [pod("collector-2-x7k", ready=False)]},
-        f"/api/v1{NS}/pods/collector-2-x7k/log?tailLines=5": collect_log,
+        f"/api/v1{NS}/pods/collector-2-x7k/log?tailLines=50": collect_log,
         f"/api/v1{NS}/pods?labelSelector=app%3Dpostgres": {"items": [pod("postgres-0", ready=db_ready)]},
     }
 
 
-def run(alertname, kube=None, prom=None):
+def run(alertname, kube=None, prom=None, cluster="azure"):
     """알림 1건을 처리하고 (기록, Slack에 보낸 글)을 돌려준다."""
     sent = []
-    record = handle(firing(alertname), kube or fake_kube({}), prom or fake_prom(), sent.append, NOW)
+    record = handle(firing(alertname), kube or fake_kube({}), prom or fake_prom(), sent.append, NOW, cluster)
     return record, sent
+
+
+# 로컬 k3d와 Azure가 같은 Slack 채널에 보낸다 (2026-10-22 로컬 경보가 Azure 장애처럼 보였다)
+def test_report_names_the_cluster_it_came_from():
+    record, sent = run("DataStale", fake_kube(cluster(suspend=True)), cluster="local-k3d")
+    assert record["cluster"] == "local-k3d"
+    assert sent[0].splitlines()[0].startswith("🩺 운영 AI 진단 [local-k3d] · DataStale")
 
 
 def test_unknown_alert_is_handed_to_a_human():
@@ -100,8 +107,52 @@ def test_data_stale_shows_why_the_last_collect_failed():
     log = "Traceback (most recent call last):\nurllib.error.HTTPError: HTTP Error 401: Unauthorized\n"
     record, sent = run("DataStale", fake_kube(cluster(collect_ok=False, collect_log=log)))
     assert record["cause"] == "collector_failing"
-    assert [e["look"] for e in record["evidence"]] == ["수집기 CronJob", "마지막 수집기 Job", "실패한 Job 로그 끝", "DB 파드"]
+    assert [e["look"] for e in record["evidence"]] == ["수집기 CronJob", "마지막 수집기 Job", "실패한 Job 로그", "DB 파드"]
     assert "collector-2 실패" in sent[0] and "HTTP Error 401: Unauthorized" in sent[0]
+
+
+# 2026-10-22 로컬 수집기의 실제 로그 모양 (85줄 중 끝부분, 긴 줄은 줄임). 끝 5줄만 보면 SQL 문장 · 매개변수뿐이다
+SCHEMA_LOG = "\n".join([
+    "Traceback (most recent call last):",
+    '  File "/usr/local/lib/python3.13/site-packages/psycopg/cursor.py", line 117, in execute',
+    "    raise ex.with_traceback(None)",
+    'psycopg.errors.UndefinedColumn: column "topics" of relation "repos" does not exist',
+    "LINE 1: ... (id, full_name, html_url, description, language, topics, cr...",
+    "                                                             ^",
+    "",
+    "The above exception was the direct cause of the following exception:",
+    "",
+    "Traceback (most recent call last):",
+    '  File "/usr/local/lib/python3.13/site-packages/psycopg/cursor.py", line 117, in execute',
+    "    raise ex.with_traceback(None)",
+    'sqlalchemy.exc.ProgrammingError: (psycopg.errors.UndefinedColumn) column "topics" of relation "repos" does not exist',
+    "LINE 1: ... (id, full_name, html_url, description, language, topics, cr...",
+    "                                                             ^",
+    "[SQL: INSERT INTO repos (id, full_name, html_url, description, language, topics, created_at, last_seen_at) VALUES "
+    + "(%(id)s::BIGINT, %(full_name)s::VARCHAR) " * 30 + "]",
+    "[parameters: {'id': 1398080271, 'full_name': 'storytold/photocraft', " + "'topics': ['art', 'rust'], " * 40 + "}]",
+    "(Background on this error at: https://sqlalche.me/e/21/f405)",
+]) + "\n"
+
+
+def test_failed_job_evidence_shows_the_error_lines_not_the_sql():
+    record, sent = run("DataStale", fake_kube(cluster(collect_ok=False, collect_log=SCHEMA_LOG)))
+    saw = record["evidence"][2]["saw"]
+    assert saw == ('psycopg.errors.UndefinedColumn: column "topics" of relation "repos" does not exist | '
+                   'sqlalchemy.exc.ProgrammingError: (psycopg.errors.UndefinedColumn) column "topics" of relation "repos" does not exist')
+    assert "[SQL" not in sent[0] and "[parameters" not in sent[0]
+
+
+def test_long_log_lines_are_cut():
+    record, _ = run("DataStale", fake_kube(cluster(collect_ok=False, collect_log="RuntimeError: " + "x" * 500 + "\n")))
+    saw = record["evidence"][2]["saw"]
+    assert len(saw) == 201 and saw.endswith("…")
+
+
+def test_log_without_error_lines_shows_its_last_lines():
+    log = "start\nfetching page 1\nfetching page 2\nKilled\n"
+    record, _ = run("DataStale", fake_kube(cluster(collect_ok=False, collect_log=log)))
+    assert record["evidence"][2]["saw"] == "fetching page 1 | fetching page 2 | Killed"
 
 
 def test_db_down_is_named_before_the_job_it_breaks():
@@ -183,7 +234,7 @@ def test_missing_data_age_while_web_metrics_answer_is_not_explained():
 def test_low_analysis_success_from_a_failing_analyzer():
     record, sent = run("AnalysisSuccessLow", fake_kube(cluster(analyze_ok=False)))
     assert record["cause"] == "analyzer_failing"
-    assert [e["look"] for e in record["evidence"]] == ["분석기 CronJob", "마지막 분석기 Job", "실패한 Job 로그 끝", "DB 파드"]
+    assert [e["look"] for e in record["evidence"]] == ["분석기 CronJob", "마지막 분석기 Job", "실패한 Job 로그", "DB 파드"]
     assert "UndefinedColumn" in sent[0]
 
 

@@ -11,3 +11,7 @@ configMapGenerator:
     namespace: agent
     behavior: replace
     literals: [url=http://prometheus.observe.svc:9090/api/v1/write]
+  - name: ops-ai-env
+    namespace: ops-ai
+    behavior: replace
+    literals: [cluster=local-k3d]

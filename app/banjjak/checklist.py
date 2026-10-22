@@ -5,6 +5,7 @@
   #20이 같은 모양의 Sonnet 진단기를 끼우고(원인은 같은 목록에서만), 이 점검표는 대조군 · LLM 장애 때 대체 경로로 남는다.
   kube(path): 앱 클러스터 API 읽기 (JSON이면 dict, 로그면 str). prom(query): 운영 Prometheus 즉시 값 (없으면 None).
 """
+import re
 from datetime import datetime, timedelta
 
 NAME = "checklist-v1"
@@ -89,11 +90,19 @@ def _last_job(kube, cronjob):
     return {"name": j["metadata"]["name"], "failed": failed}, f"{j['metadata']['name']} {state}"
 
 
+# 파이썬 예외 줄 모양: "모듈.클래스: 메시지" 또는 "...Error: 메시지" (들여쓴 스택 · [SQL ...] 줄은 아니다)
+EXCEPTION_LINE = re.compile(r"^(\w+\.)+\w+: |^\w*(Error|Exception)\b")
+LINE_MAX = 200
+
+
 def _job_log(kube, job):
     pods = kube(f"/api/v1{NS}/pods?labelSelector=job-name%3D{job}")["items"]
     last = max(pods, key=lambda p: p["metadata"]["creationTimestamp"])   # 다시 시도했으면 마지막 시도
-    log = kube(f"/api/v1{NS}/pods/{last['metadata']['name']}/log?tailLines=5")
-    return None, " | ".join(log.strip().splitlines()) or "로그 없음"
+    lines = [l for l in kube(f"/api/v1{NS}/pods/{last['metadata']['name']}/log?tailLines=50").splitlines() if l.strip()]
+    # 오류 줄이 있으면 그것만 (끝 줄은 SQL 문장 · 매개변수일 때가 많다), 없으면 끝 3줄
+    picked = list(dict.fromkeys(l for l in lines if EXCEPTION_LINE.match(l)))[-2:] or lines[-3:]
+    cut = [l if len(l) <= LINE_MAX else l[:LINE_MAX] + "…" for l in picked]
+    return None, " | ".join(cut) or "로그 없음"
 
 
 def _pods(kube, app, now):
@@ -181,7 +190,7 @@ def _batch(evidence, kube, now, cronjob, label):
     cron = _see(evidence, f"{label} CronJob", lambda: _cronjob(kube, cronjob, now))
     job = _see(evidence, f"마지막 {label} Job", lambda: _last_job(kube, cronjob))
     if job and job["failed"]:
-        _see(evidence, "실패한 Job 로그 끝", lambda: _job_log(kube, job["name"]))
+        _see(evidence, "실패한 Job 로그", lambda: _job_log(kube, job["name"]))
     db = _see(evidence, "DB 파드", lambda: _pods(kube, "postgres", now))
     if cron and cron["suspend"]:
         return f"{cronjob}_suspended"

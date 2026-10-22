@@ -29,6 +29,8 @@ spec:
           env:
             - name: HEARTBEAT_URL          # 밖(Better Stack)에 1분마다 "살아 있다". 없으면 안 보낸다
               valueFrom: {secretKeyRef: {name: heartbeats, key: ops_ai, optional: true}}
+            - name: CLUSTER_NAME           # 보고 첫 줄에 [azure] · [local-k3d]
+              valueFrom: {configMapKeyRef: {name: ops-ai-env, key: cluster}}
             - name: PROM_URL               # 앱 지표도 여기 있다 (앱 VM 에이전트가 보낸다)
               value: http://prometheus.observe.svc:9090
             - name: SLACK_WEBHOOK_URL      # 진단 보고. 없으면 기록만 한다 (알림 자체는 Alertmanager가 따로 보낸다)

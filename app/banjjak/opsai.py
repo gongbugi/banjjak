@@ -32,11 +32,12 @@ KINDS = {
 }
 
 
-def handle(alert, kube, prom, slack, now):
-    """울린 알림 1건: 분류(코드) → 진단(점검표) → 기록 → Slack 보고. 아직 아무것도 고치지 않는다 (조치는 #8)."""
+def handle(alert, kube, prom, slack, now, cluster):
+    """울린 알림 1건: 분류(코드) → 진단(점검표) → 기록 → Slack 보고. 아직 아무것도 고치지 않는다 (조치는 #8).
+    cluster: 이 운영 AI가 지키는 곳 (azure · local-k3d). 둘이 같은 Slack 채널에 보내므로 보고마다 밝힌다."""
     kind = alert.get("labels", {}).get("alertname")
     sli, severity = KINDS.get(kind, (None, "unknown"))
-    record = {"event": "diagnosis", "at": now.isoformat(), "alertname": kind, "startsAt": alert.get("startsAt"),
+    record = {"event": "diagnosis", "cluster": cluster, "at": now.isoformat(), "alertname": kind, "startsAt": alert.get("startsAt"),
               "fingerprint": alert.get("fingerprint"), "sli": sli, "severity": severity,
               **checklist.diagnose(kind, kube, prom, now)}
     # ponytail: 판단 기록은 표준 출력 한 줄(JSON). 파드가 바뀌면 사라진다 → 승인 대기를 DB에 둘 때(#8) 같이 옮긴다
@@ -46,7 +47,7 @@ def handle(alert, kube, prom, slack, now):
 
 
 def report(r):
-    lines = [f"🩺 운영 AI 진단 · {r['alertname']} ({r['sli'] or 'SLI 모름'} · {r['severity']})",
+    lines = [f"🩺 운영 AI 진단 [{r['cluster']}] · {r['alertname']} ({r['sli'] or 'SLI 모름'} · {r['severity']})",
              f"판단: {r['verdict'] or '판단 못 함 → 사람이 봐 주세요'}", "본 것:"]
     lines += [f"• {e['look']}: {e['saw']}" for e in r["evidence"]]
     lines.append("조치: 없음 (지금은 보고만 한다)")
@@ -120,5 +121,6 @@ async def alerts(request: Request, background: BackgroundTasks):
         }, ensure_ascii=False), flush=True)
         if a.get("status") == "firing":
             # 진단은 응답한 뒤에 한다: 앱 VM이 멈추면 도구마다 시간 초과를 기다리는데 그동안 Alertmanager를 붙잡지 않는다
-            background.add_task(handle, a, _kube, _prom, _slack, datetime.now(timezone.utc))
+            background.add_task(handle, a, _kube, _prom, _slack, datetime.now(timezone.utc),
+                                os.environ.get("CLUSTER_NAME", "unknown"))
     return {"received": len(received)}

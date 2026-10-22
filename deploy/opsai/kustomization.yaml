@@ -3,6 +3,10 @@ kind: Kustomization
 namespace: ops-ai
 resources:
   - opsai.yaml
+configMapGenerator:
+  # 보고에 밝히는 클러스터 이름. 로컬은 deploy/clusters/k3d-banjjak에서 바꾼다 (같은 Slack 채널을 쓴다)
+  - name: ops-ai-env
+    literals: [cluster=azure]
 images:
   - name: banjjak
     newName: ghcr.io/gongbugi/banjjak
