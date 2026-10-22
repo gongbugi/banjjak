@@ -476,13 +476,17 @@ def test_only_the_approver_can_press(tmp_path):
     assert body.get("replace_original") is False and body["response_type"] == "ephemeral"   # 누른 사람에게만 보인다
 
 
-def test_pressing_a_finished_action_changes_nothing(tmp_path):
+def test_pressing_a_finished_action_only_clears_its_buttons(tmp_path):
+    # 5분 무응답으로 실행되면 원래 글의 버튼을 지울 수단이 없다 (response_url은 클릭 때만 온다).
+    # 2026-10-22 본인: 끝난 조치의 버튼이 눌러도 안 사라졌다 → 누르면 결과만 보여 주고 버튼을 지운다
     ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
     record = ops.alert("DataStale")
-    ops.tick(NOW + timedelta(minutes=5))   # 5분 무응답으로 이미 실행됐다
+    ops.tick(NOW + timedelta(minutes=5))
     ops.click(record["id"], "reject", NOW + timedelta(minutes=6))
-    assert ops.states() == [("resume_collector", "T1", "executed")]
-    assert "이미 끝난 조치" in ops.responses[-1][1]["text"]
+    assert ops.states() == [("resume_collector", "T1", "executed")]   # 거부해도 바뀌지 않는다
+    url, body = ops.responses[-1]
+    assert body["replace_original"] is True and "blocks" not in body
+    assert "이미 끝난 조치" in body["text"] and "collector 다시 켬" in body["text"]
 
 
 # Alertmanager webhook 본문 (필요한 칸만)

@@ -78,13 +78,17 @@ def on_click(payload, now, conn, hands, approver, respond):
         return respond(url, {"response_type": "ephemeral", "replace_original": False,
                              "text": f"다른 클러스터({cluster or '모름'})의 버튼이라 여기({hands.cluster})서는 처리하지 않는다"})
     row = actions.decide(conn, record_id, clicked["action_id"] == "approve", now, hands, by="Slack 버튼")
-    if row is None:   # 5분 무응답으로 이미 실행됐거나 이미 누른 버튼
-        state = conn.execute("SELECT state FROM records WHERE id = ?", (record_id,)).fetchone()
-        return respond(url, {"response_type": "ephemeral", "replace_original": False,
-                             "text": f"기록 #{record_id}: 이미 끝난 조치 ({state[0] if state else '없음'})"})
-    verdict = "승인" if clicked["action_id"] == "approve" else "거부"
-    done = f"{verdict}: {actions.ICON[row['state']]} · 기록 #{row['id']} {actions.ACTIONS[row['action']][1]} · {row['result']}"
     original = payload.get("message", {}).get("text", "")
+    if row is None:   # 5분 무응답으로 이미 실행됐거나 이미 누른 버튼
+        found = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
+        if found is None:
+            return respond(url, {"response_type": "ephemeral", "replace_original": False,
+                                 "text": f"기록 #{record_id}이 없다"})
+        # 타이머로 끝난 조치는 원래 글의 버튼을 지울 수단이 없었다 → 지금 결과만 붙이고 버튼을 지운다
+        done = f"이미 끝난 조치: {actions.ICON[found['state']]} · 기록 #{record_id} · {found['result']}"
+    else:
+        verdict = "승인" if clicked["action_id"] == "approve" else "거부"
+        done = f"{verdict}: {actions.ICON[row['state']]} · 기록 #{row['id']} {actions.ACTIONS[row['action']][1]} · {row['result']}"
     return respond(url, {"replace_original": True, "text": f"{original}\n\n{done}" if original else done})
 
 
