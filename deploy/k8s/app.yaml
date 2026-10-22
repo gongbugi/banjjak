@@ -39,6 +39,12 @@ spec:
           livenessProbe:
             httpGet: {path: /healthz, port: 8000}  # 프로세스 생존만
             periodSeconds: 20
+          lifecycle:
+            # 파드가 꺼질 때 k8s는 엔드포인트에서 빼기와 SIGTERM을 동시에 한다. 입구(Traefik)는 1~2초 늦게 알아서
+            # 그 사이 요청이 이미 닫힌 옛 파드로 가 502가 났다 (2026-10-22 재현: 교체 1번에 502 5~6건 · 끊김 1건,
+            # 모두 SIGTERM 뒤 0~4.5초). 10초 더 받다가 끝낸다 → deploy/check-rollout.sh로 확인
+            preStop:
+              sleep: {seconds: 10}
           resources:
             requests: {cpu: 50m, memory: 96Mi}
             limits: {memory: 256Mi}
