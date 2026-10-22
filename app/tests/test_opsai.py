@@ -1,8 +1,10 @@
 import json
-from datetime import datetime, timezone
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
+from banjjak.actions import Hands, connect, decide, tick
 from banjjak.opsai import app, handle
 
 client = TestClient(app)
@@ -43,17 +45,29 @@ def job(name, owner, ok, at):
             "status": status}
 
 
+def rs(revision, image):
+    """웹 배포의 판 하나 (ReplicaSet). 롤백은 이 template으로 되돌린다."""
+    return {"metadata": {"name": f"web-h{revision}", "annotations": {"deployment.kubernetes.io/revision": str(revision)}},
+            "spec": {"template": {"metadata": {"labels": {"app": "web", "pod-template-hash": f"h{revision}"}},
+                                  "spec": {"containers": [{"name": "web", "image": image}]}}}}
+
+
 def cluster(*, suspend=False, collect_ok=True, collect_log="", last_success="2026-10-21T11:00:20Z", db_ready=True,
-            deployed="2026-10-20T09:00:00Z", web_ready=True, web_waiting=None, analyze_ok=True):
+            deployed="2026-10-20T09:00:00Z", web_ready=True, web_waiting=None, analyze_ok=True,
+            change_cause=None):
     """앱 클러스터 하나: 웹 · 수집기 · DB (k8s API가 실제로 돌려주는 모양에서 쓰는 칸만)."""
     return {
         f"/apis/apps/v1{NS}/deployments/web": {
-            "metadata": {"annotations": {"kubernetes.io/change-cause": "deploy a169f9e04c1b at " + deployed}},
+            "metadata": {"annotations": {
+                "kubernetes.io/change-cause": change_cause or "deploy a169f9e04c1b at " + deployed,
+                "deployment.kubernetes.io/revision": "5"}},
             "status": {"conditions": [
                 {"type": "Available", "status": "True", "lastUpdateTime": "2026-10-21T13:59:00Z"},
                 {"type": "Progressing", "status": "True", "reason": "NewReplicaSetAvailable", "lastUpdateTime": deployed},
             ]}},
         f"/api/v1{NS}/pods?labelSelector=app%3Dweb": {"items": [pod("web-5d9c-abc", ready=web_ready, waiting=web_waiting)]},
+        f"/apis/apps/v1{NS}/replicasets?labelSelector=app%3Dweb": {"items": [
+            rs(3, "ghcr.io/gongbugi/banjjak:older"), rs(5, "ghcr.io/gongbugi/banjjak:bad"), rs(4, "ghcr.io/gongbugi/banjjak:good")]},
         f"/apis/batch/v1{NS}/cronjobs/collector": {
             "spec": {"suspend": suspend},
             "status": {"lastScheduleTime": "2026-10-21T13:00:00Z", "lastSuccessfulTime": last_success}},
@@ -72,11 +86,35 @@ def cluster(*, suspend=False, collect_ok=True, collect_log="", last_success="202
     }
 
 
+class Ops:
+    """운영 AI 하나: 진짜 SQLite 파일 + 가짜 앱 클러스터(읽기 · 쓰기) · Slack. 쓰기 요청은 patched에 쌓인다."""
+
+    def __init__(self, db, kube=None, prom=None, mode="execute", cluster="azure"):
+        self.db, self.prom, self.sent, self.patched = db, prom or fake_prom(), [], []
+        self.hands = Hands(kube or fake_kube({}), lambda path, body, ctype: self.patched.append((path, body)),
+                           self.sent.append, mode, cluster)
+
+    def alert(self, alertname, at=NOW):
+        with closing(connect(self.db)) as conn:
+            return handle(firing(alertname), self.prom, at, conn, self.hands)
+
+    def tick(self, at):
+        with closing(connect(self.db)) as conn:   # 매번 새 연결 = 파드가 바뀌어도 DB에서 이어받는다
+            tick(conn, at, self.hands)
+
+    def decide(self, record_id, approve, at):
+        with closing(connect(self.db)) as conn:
+            decide(conn, record_id, approve, at, self.hands, by="본인")
+
+    def states(self):
+        with closing(connect(self.db)) as conn:
+            return [(r["action"], r["tier"], r["state"]) for r in conn.execute("SELECT * FROM records ORDER BY id")]
+
+
 def run(alertname, kube=None, prom=None, cluster="azure"):
     """알림 1건을 처리하고 (기록, Slack에 보낸 글)을 돌려준다."""
-    sent = []
-    record = handle(firing(alertname), kube or fake_kube({}), prom or fake_prom(), sent.append, NOW, cluster)
-    return record, sent
+    ops = Ops(":memory:", kube, prom, cluster=cluster)
+    return ops.alert(alertname), ops.sent
 
 
 # 로컬 k3d와 Azure가 같은 Slack 채널에 보낸다 (2026-10-22 로컬 경보가 Azure 장애처럼 보였다)
@@ -242,6 +280,108 @@ def test_silent_app_cluster_is_the_first_symptom():
     record, _ = run("DataStale", fake_kube({}))
     assert record["cause"] == "app_unreachable"
     assert all(e["saw"].startswith("못 읽음") for e in record["evidence"])
+
+
+# --- 조치 (#8): 원인 코드 → 조치 · 등급 → 실행 / 거부 / 드라이런 / 사람에게 ---
+
+COLLECTOR = f"/apis/batch/v1{NS}/cronjobs/collector"
+
+
+def test_t1_runs_after_five_minutes_without_an_answer(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
+    record = ops.alert("DataStale")
+    assert (record["action"], record["tier"], record["state"]) == ("resume_collector", "T1", "waiting")
+    assert "조치: 수집기 CronJob 재개 (T1) · 5분 뒤 실행" in ops.sent[0]
+    ops.tick(NOW + timedelta(minutes=4, seconds=59))
+    assert ops.patched == []
+    ops.tick(NOW + timedelta(minutes=5))   # 기다리던 상태는 DB에서 이어받는다 (새 연결)
+    assert ops.patched == [(COLLECTOR, {"spec": {"suspend": False}})]
+    assert ops.states() == [("resume_collector", "T1", "executed")]
+    assert "실행" in ops.sent[-1] and "수집기 CronJob 재개" in ops.sent[-1]
+    ops.tick(NOW + timedelta(minutes=10))
+    assert len(ops.patched) == 1   # 한 번만 한다
+
+
+def test_rejected_t1_is_not_run(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
+    record = ops.alert("DataStale")
+    ops.decide(record["id"], approve=False, at=NOW + timedelta(minutes=1))
+    ops.tick(NOW + timedelta(minutes=5))
+    assert ops.patched == []
+    assert ops.states() == [("resume_collector", "T1", "rejected")]
+    assert "거부" in ops.sent[-1]
+
+
+def test_t2_waits_for_approval(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube({}))   # 앱 클러스터가 아무 답도 하지 않는다
+    record = ops.alert("DataAgeMissing")
+    assert (record["action"], record["tier"], record["state"]) == ("restart_app_vm", "T2", "waiting")
+    assert "승인 전에는 실행하지 않는다" in ops.sent[0]
+    ops.tick(NOW + timedelta(hours=6))
+    assert ops.patched == [] and ops.states() == [("restart_app_vm", "T2", "waiting")]
+
+
+def test_same_action_more_than_twice_an_hour_goes_up_a_tier(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
+    for minutes in (0, 10, 20):
+        ops.alert("DataStale", at=NOW + timedelta(minutes=minutes))
+        ops.tick(NOW + timedelta(minutes=minutes + 5))
+    assert ops.states() == [("resume_collector", "T1", "executed"), ("resume_collector", "T1", "executed"),
+                            ("resume_collector", "T2", "waiting")]
+    assert "1시간에 3번째 → T2로 올림" in ops.sent[-1]
+    ops.tick(NOW + timedelta(hours=2))
+    assert len(ops.patched) == 2
+
+
+def test_dry_run_records_instead_of_running(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), mode="dry-run")
+    ops.alert("DataStale")
+    assert "5분 뒤 드라이런" in ops.sent[0]
+    ops.tick(NOW + timedelta(minutes=5))
+    assert ops.patched == []
+    assert ops.states() == [("resume_collector", "T1", "dry_run")]
+    assert "드라이런" in ops.sent[-1]
+
+
+def test_causes_without_an_action_go_to_a_human(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(collect_ok=False)))
+    record = ops.alert("DataStale")
+    assert record["cause"] == "collector_failing"
+    assert ops.states() == [(None, None, "human")]
+    assert "조치: 없음 → 사람이 봐 주세요" in ops.sent[0]
+
+
+def test_rollback_goes_back_one_revision(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(deployed="2026-10-21T13:50:00Z")))
+    assert ops.alert("WebErrorRateHigh")["action"] == "rollback_web"
+    ops.tick(NOW + timedelta(minutes=5))
+    # 지금 판(5) 바로 앞(4)의 template으로. pod-template-hash는 k8s가 다시 붙인다
+    assert ops.patched == [(f"/apis/apps/v1{NS}/deployments/web", [
+        {"op": "replace", "path": "/spec/template",
+         "value": {"metadata": {"labels": {"app": "web"}},
+                   "spec": {"containers": [{"name": "web", "image": "ghcr.io/gongbugi/banjjak:good"}]}}},
+        {"op": "add", "path": "/metadata/annotations/kubernetes.io~1change-cause", "value": "ops-ai rollback to revision 4"},
+    ])]
+    assert "판 5 → 4" in ops.sent[-1]
+
+
+def test_rollback_does_not_undo_its_own_rollback(tmp_path):
+    # 되돌린 판도 "최근 배포"로 보인다. 또 되돌리면 망가진 판으로 돌아간다 → 사람에게
+    kube = fake_kube(cluster(deployed="2026-10-21T13:50:00Z", change_cause="ops-ai rollback to revision 4"))
+    ops = Ops(str(tmp_path / "opsai.db"), kube)
+    ops.alert("WebErrorRateHigh")
+    ops.tick(NOW + timedelta(minutes=5))
+    assert ops.patched == []
+    assert ops.states() == [("rollback_web", "T1", "failed")]
+    assert "실패" in ops.sent[-1] and "사람" in ops.sent[-1]
+
+
+def test_traffic_surge_scales_web_to_two(tmp_path):
+    rps = lambda q: (0.4 if "offset 1h" in q else 6.0) if "duration_seconds_count" in q else None
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster()), rps)
+    assert ops.alert("WebLatencyP95High")["action"] == "scale_web"
+    ops.tick(NOW + timedelta(minutes=5))
+    assert ops.patched == [(f"/apis/apps/v1{NS}/deployments/web/scale", {"spec": {"replicas": 2}})]
 
 
 # Alertmanager webhook 본문 (필요한 칸만)

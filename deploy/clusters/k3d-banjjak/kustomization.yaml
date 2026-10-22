@@ -1,11 +1,13 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 # 로컬은 VM이 하나라 운영 쪽(관측 · 알림 · 운영 AI)도 같은 클러스터에 올린다. Grafana는 뺀다
+# 운영 AI 조치는 로컬에서만 실제로 실행한다 (opsai-act 쓰기 권한 + actions=execute)
 resources:
   - ../../k8s
   - ../../agent
   - ../../ops
   - ../../opsai
+  - ../../opsai-act
 configMapGenerator:
   - name: agent-target
     namespace: agent
@@ -14,7 +16,7 @@ configMapGenerator:
   - name: ops-ai-env
     namespace: ops-ai
     behavior: replace
-    literals: [cluster=local-k3d]
+    literals: [cluster=local-k3d, actions=execute]
   - name: observe-env
     namespace: observe
     behavior: replace

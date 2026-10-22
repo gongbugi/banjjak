@@ -1,4 +1,8 @@
 import os
+import tempfile
+
+# 운영 AI의 판단 · 조치 기록 (SQLite). 운영은 운영 VM 디스크, 시험은 임시 파일
+os.environ.setdefault("OPSAI_DB", os.path.join(tempfile.mkdtemp(), "opsai.db"))
 
 # 진짜 PostgreSQL로 테스트한다 (CI는 서비스 컨테이너, 로컬은 Docker). 앱을 import하기 전에 정한다.
 os.environ.setdefault(

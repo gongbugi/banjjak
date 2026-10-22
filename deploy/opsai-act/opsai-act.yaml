@@ -1,0 +1,29 @@
+# 운영 AI 조치(쓰기) 권한: 조치 표(app/banjjak/actions.py)의 조치 · 대상 이름만. 실행을 켠 클러스터 묶음에만 넣는다.
+# 지금은 로컬 k3d만. Azure는 Slack 버튼(#8 2단계)이 생길 때까지 넣지 않는다 → 드라이런을 RBAC가 보장 (쓰기는 403)
+# Job 생성 · Secret · 삭제 · 다른 이름(postgres 등)은 없다 → deploy/check-opsai-rbac.sh <ctx> execute로 확인
+# ponytail: 롤백(배포 template 교체) 권한은 웹 이미지를 바꿀 수 있는 권한과 같다. 이름 제한까지가 RBAC 선
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ops-ai-act
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]           # 롤백
+    resourceNames: [web]
+    verbs: [patch]
+  - apiGroups: [apps]
+    resources: [deployments/scale]     # 레플리카 1 → 2
+    resourceNames: [web]
+    verbs: [patch]
+  - apiGroups: [batch]
+    resources: [cronjobs]              # 멈춘 CronJob 재개
+    resourceNames: [collector, analyzer]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ops-ai-act
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: ops-ai-act}
+subjects:
+  - {kind: ServiceAccount, name: ops-ai, namespace: banjjak}

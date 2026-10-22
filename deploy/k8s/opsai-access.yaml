@@ -1,6 +1,7 @@
 # 운영 AI(운영 VM)가 이 클러스터를 읽는 계정. banjjak 네임스페이스의 파드 · 로그 · 배포 · Job만 읽는다.
 # Secret · 쓰기 · 다른 네임스페이스(장애 주입 포함)는 없다 → deploy/check-opsai-rbac.sh로 확인
-# 토큰은 운영 VM의 Secret app-cluster로 옮긴다 (infra/azure/opsai-secrets.ps1). 조치 권한은 #8에서 허용 목록만 더한다
+# 토큰은 운영 VM의 Secret app-cluster로 옮긴다 (infra/azure/opsai-secrets.ps1).
+# 조치(쓰기) 권한은 deploy/opsai-act에 따로 두고, 실행을 켠 클러스터 묶음에만 넣는다 (지금은 로컬 k3d만)
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -16,7 +17,7 @@ rules:
     resources: [pods, pods/log]
     verbs: [get, list]
   - apiGroups: [apps]
-    resources: [deployments]
+    resources: [deployments, replicasets]   # replicasets: 롤백할 이전 판을 찾는다 (드라이런도 읽는다)
     verbs: [get, list]
   - apiGroups: [batch]
     resources: [jobs, cronjobs]

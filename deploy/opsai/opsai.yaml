@@ -3,13 +3,24 @@ kind: Namespace
 metadata:
   name: ops-ai
 ---
-# 운영 AI ①: 울린 알림을 점검표로 진단해 기록하고 Slack에 보고한다 (조치는 #8)
+# 판단 · 조치 기록과 기다리는 조치(SQLite). 파드가 바뀌어도 이어받는다
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ops-ai
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 1Gi}
+---
+# 운영 AI: 울린 알림을 점검표로 진단하고(#7), 조치 표로 조치 · 등급을 정해 5분 뒤 실행하거나 사람에게 넘긴다(#8)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ops-ai
 spec:
   replicas: 1
+  strategy: {type: Recreate}   # 둘이 겹쳐 같은 조치를 두 번 하지 않게, 디스크(RWO)를 둘이 잡지 않게
   selector:
     matchLabels: {app: ops-ai}
   template:
@@ -17,10 +28,11 @@ spec:
       labels: {app: ops-ai}
     spec:
       # 운영 클러스터 API 토큰은 아예 없다 → 운영 · 장애 주입 네임스페이스에 아무 권한이 없다.
-      # 앱 클러스터는 Secret app-cluster의 읽기 전용 토큰으로만 본다 (deploy/k8s/opsai-access.yaml)
+      # 앱 클러스터는 Secret app-cluster의 토큰으로만 본다: 읽기(deploy/k8s/opsai-access.yaml) + 조치(deploy/opsai-act, 실행을 켠 클러스터만)
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        fsGroup: 10001               # 이미지 사용자. 기록 디스크에 쓴다
       containers:
         - name: ops-ai
           image: banjjak
@@ -31,12 +43,17 @@ spec:
               valueFrom: {secretKeyRef: {name: heartbeats, key: ops_ai, optional: true}}
             - name: CLUSTER_NAME           # 보고 첫 줄에 [azure] · [local-k3d]
               valueFrom: {configMapKeyRef: {name: ops-ai-env, key: cluster}}
+            - name: ACTIONS                # execute · dry-run. 쓰기 권한이 없는 클러스터는 dry-run
+              valueFrom: {configMapKeyRef: {name: ops-ai-env, key: actions}}
+            - name: OPSAI_DB
+              value: /data/opsai.db
             - name: PROM_URL               # 앱 지표도 여기 있다 (앱 VM 에이전트가 보낸다)
               value: http://prometheus.observe.svc:9090
             - name: SLACK_WEBHOOK_URL      # 진단 보고. 없으면 기록만 한다 (알림 자체는 Alertmanager가 따로 보낸다)
               valueFrom: {secretKeyRef: {name: slack-webhook, key: url, optional: true}}
           volumeMounts:
             - {name: app-cluster, mountPath: /etc/app-cluster, readOnly: true}
+            - {name: data, mountPath: /data}
           ports:
             - containerPort: 8080
           readinessProbe:
@@ -50,6 +67,8 @@ spec:
       volumes:
         - name: app-cluster            # url · token · ca.crt. 없으면 진단이 "앱 클러스터 API가 아무 답도 하지 않는다"로 나온다
           secret: {secretName: app-cluster, optional: true}
+        - name: data
+          persistentVolumeClaim: {claimName: ops-ai}
 ---
 apiVersion: v1
 kind: Service
