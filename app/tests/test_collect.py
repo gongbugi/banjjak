@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+from sqlalchemy import text
+
 from banjjak import db
 from banjjak.collect import collect_once
 from banjjak.trending import trending
@@ -60,3 +63,25 @@ def test_trending_ranks_by_stars_gained_per_day():
         ("a/fast", 96.0, False),   # 12시간에 48개 → 하루 96개
         ("b/big", 24.0, False),    # 12시간에 12개 → 하루 24개
     ]
+
+
+# 2026-10-23 00:00 · 01:00 KST: GitHub이 장애 중에 200 + 빈 결과를 줬고, 수집기는 0건을 저장한 채 "성공"으로 끝났다
+# (Job 성공 · 하트비트 정상 · 데이터만 묵음). 빈 결과는 실패로 끝내야 재시도 · 하트비트 끊김 · 운영 AI 진단이 함께 울린다
+def test_empty_search_fails_the_run_instead_of_storing_nothing():
+    search = lambda q, p: {"items": [], "total_count": 0, "incomplete_results": True}
+    with pytest.raises(RuntimeError, match=r"0건.*total_count=0.*incomplete_results=True"):
+        with db.engine().begin() as conn:
+            collect_once(search, conn, NOW)
+    with db.engine().connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM star_snapshots")).scalar() == 0
+
+
+def test_each_page_logs_whether_github_trusts_its_result(capsys):
+    full = [item(i, f"o/r{i}", 500 - i, "2026-10-10T00:00:00Z") for i in range(100)]
+    pages = {1: {"items": full, "total_count": 4321, "incomplete_results": False},
+             2: {"items": full[:30], "total_count": 4321, "incomplete_results": True}}
+    with db.engine().begin() as conn:
+        assert collect_once(lambda q, p: pages[p], conn, NOW) == 130
+    lines = capsys.readouterr().out.splitlines()
+    assert lines == ["search page 1: 100 items · total_count=4321 · incomplete_results=False",
+                     "search page 2: 30 items · total_count=4321 · incomplete_results=True"]

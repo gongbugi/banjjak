@@ -17,12 +17,18 @@ MAX_PAGES = 5        # 최대 500개 추적
 
 
 def collect_once(search, conn, now):
-    """search(query, page) -> GitHub 검색 응답(dict). 기록한 레포 수를 돌려준다."""
+    """search(query, page) -> GitHub 검색 응답(dict). 기록한 레포 수를 돌려준다.
+    한 건도 못 받으면 실패로 끝낸다: GitHub은 장애 중에도 200 + 빈 결과를 줄 수 있다 (2026-10-23 00:00 · 01:00 KST).
+    그걸 "성공"으로 끝내면 Job · 하트비트는 정상인데 데이터만 묵는다 → 실패여야 재시도 · 하트비트 끊김 · 운영 AI 진단이 울린다."""
     since = (now - timedelta(days=WINDOW_DAYS)).date().isoformat()
     query = f"created:>={since} stars:>={MIN_STARS}"
-    count = 0
+    count, seen = 0, None
     for page in range(1, MAX_PAGES + 1):
-        items = search(query, page)["items"]
+        body = search(query, page)
+        items = body["items"]
+        # GitHub이 이 결과를 믿어도 되는지 (incomplete_results: 검색이 시간 안에 다 못 돌았다). 사후에 원인을 가리려고 남긴다
+        seen = f"total_count={body.get('total_count')} · incomplete_results={body.get('incomplete_results')}"
+        print(f"search page {page}: {len(items)} items · {seen}", flush=True)
         for it in items:
             row = {k: it[k] for k in ("id", "full_name", "html_url", "description", "language", "created_at")}
             row["topics"] = it.get("topics", [])   # 분야 분류의 첫 단서 (실측: 절반 정도만 붙어 있다)
@@ -34,6 +40,8 @@ def collect_once(search, conn, now):
         count += len(items)
         if len(items) < PER_PAGE:
             break
+    if count == 0:
+        raise RuntimeError(f"GitHub 검색이 0건을 돌려줬다 ({seen}) → 빈 결과를 성공으로 저장하지 않는다")
     return count
 
 
