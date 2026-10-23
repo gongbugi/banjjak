@@ -1,9 +1,13 @@
+import asyncio
+import json
+import os
+import random
 import re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 from prometheus_client import REGISTRY, Histogram
@@ -115,6 +119,30 @@ def freshness():
     return JSONResponse(body, status_code=200 if fresh else 503)
 
 
+async def _fault():
+    """장애 주입 스위치 (#10). 화면 요청(/ · /api/trending)에만 건다. 검사 주소는 건드리지 않는다.
+    두 곳에서 읽는다: 주입기가 바꾸는 ConfigMap 파일(FAULT_FILE, 운영 AI는 ConfigMap을 못 읽는다)과
+    "나쁜 배포"로 웹 배포 설정에 들어간 FAULT 환경 변수(롤백하면 사라진다). 라우팅 뒤에 걸어야 경보 식이 그 주소로 센다."""
+    fault = {}
+    for raw in (_read(os.environ.get("FAULT_FILE", "/etc/fault/fault.json")), os.environ.get("FAULT")):
+        try:
+            fault.update(json.loads(raw) if raw else {})
+        except ValueError:
+            pass   # 깨진 스위치는 꺼진 것으로 본다
+    if fault.get("delay"):
+        await asyncio.sleep(float(fault["delay"]))
+    if random.random() < float(fault.get("error_rate", 0)):
+        raise HTTPException(status_code=500)   # 사용자에게는 평범한 서버 오류로 보인다
+
+
+def _read(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
 def _snapshot():
     with db.engine().connect() as conn:
         updated = latest_capture(conn)
@@ -122,13 +150,13 @@ def _snapshot():
         return (updated.isoformat() if updated else None), items, weekly_tally(conn, _now())
 
 
-@app.get("/api/trending")
+@app.get("/api/trending", dependencies=[Depends(_fault)])
 def api_trending():
     updated_at, items, week = _snapshot()
     return {"updated_at": updated_at, "items": items, "week": week}
 
 
-@app.get("/")
+@app.get("/", dependencies=[Depends(_fault)])
 def index(request: Request):
     updated_at, items, week = _snapshot()
     basis = datetime.fromisoformat(updated_at).astimezone(KST) if updated_at else None

@@ -1,0 +1,70 @@
+# 장애 주입기 (#10). 운영 VM에서만 돈다. 운영 AI는 운영 클러스터 토큰이 없어 이 네임스페이스(정답 기록)를 못 읽고,
+# Prometheus는 이 네임스페이스를 긁지 않는다. 주입 사실은 어디에도 알리지 않는다 (실험 뒤 #12에서 공개)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos
+---
+# 정답 기록 (SQLite): 언제 · 무엇을 · 어떻게 끝났나
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chaos
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 1Gi}
+---
+# 끄는 스위치. 값은 매니페스트에 두지 않는다 (배포할 때마다 꺼지거나 켜지지 않게). 없으면 off
+#   켜기: kubectl -n chaos patch configmap switch -p '{"data":{"state":"on"}}'   (on · manual · off)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: switch
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: injector
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0                  # 한 바퀴가 실패하면 다음 10분에 다시 본다 (같은 주입을 두 번 하지 않게)
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false   # 운영 클러스터 API는 쓰지 않는다
+          securityContext:
+            runAsNonRoot: true
+            fsGroup: 10001
+          containers:
+            - name: injector
+              image: banjjak
+              imagePullPolicy: IfNotPresent   # 태그는 커밋 SHA라 바뀌지 않는다
+              command: ["python", "-m", "banjjak.chaos"]
+              env:
+                - {name: CHAOS_DB, value: /data/chaos.db}
+                - name: HEARTBEAT_URL          # 밖(Better Stack)에 "한 바퀴 돌았다". 없으면 안 보낸다
+                  valueFrom: {secretKeyRef: {name: heartbeats, key: chaos, optional: true}}
+              volumeMounts:
+                - {name: app-cluster, mountPath: /etc/app-cluster, readOnly: true}
+                - {name: switch, mountPath: /etc/chaos-switch, readOnly: true}
+                - {name: data, mountPath: /data}
+              resources:
+                requests: {cpu: 20m, memory: 48Mi}
+                limits: {memory: 128Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+          volumes:
+            - name: app-cluster        # 앱 클러스터 banjjak/chaos 토큰 (infra/azure/chaos-secrets.ps1). 없으면 주입을 못 한다
+              secret: {secretName: app-cluster, optional: true}
+            - name: switch
+              configMap: {name: switch, optional: true}
+            - name: data
+              persistentVolumeClaim: {claimName: chaos}

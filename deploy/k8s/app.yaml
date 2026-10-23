@@ -51,6 +51,11 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: fault, mountPath: /etc/fault, readOnly: true}
+      volumes:
+        - name: fault                  # 장애 주입 스위치 (#10). 웹이 요청마다 /etc/fault/fault.json을 읽는다 (바뀌면 1분 안에 들어온다)
+          configMap: {name: web-fault, optional: true}
 ---
 apiVersion: v1
 kind: Service

@@ -9,7 +9,6 @@
 import asyncio
 import json
 import os
-import ssl
 import urllib.parse
 import urllib.request
 from contextlib import asynccontextmanager, closing
@@ -17,12 +16,11 @@ from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, FastAPI, Request
 
-from banjjak import actions, checklist
+from banjjak import actions, appcluster, checklist
 from banjjak.heartbeat import ping
 
 BEAT_EVERY = 60   # 초. Better Stack에는 더 긴 간격으로 걸어 한두 번 빠져도 버틴다
 TICK_EVERY = 15   # 초. 5분 기다린 T1 실행 · 실행한 조치 확인을 보는 주기
-APP_CLUSTER = "/etc/app-cluster"   # Secret app-cluster: url · token · ca.crt (앱 클러스터 ServiceAccount banjjak/ops-ai)
 
 # 분류는 코드다: 종류 = 알림 규칙 이름, 심각도 = 그 규칙이 지키는 SLI (목표값은 스펙 #1)
 # critical: 방문자가 지금 못 쓰거나 운영자가 아무것도 못 본다. warning: 쓸 수는 있는데 목표를 벗어났다
@@ -117,30 +115,8 @@ def report(r, row, hands):
     return "\n".join(lines)
 
 
-def _app_cluster():
-    """앱 클러스터 주소 · 토큰 · TLS. 파일은 매번 읽는다 → Secret을 바꾸면 재시작 없이 따라간다."""
-    def read(name):
-        with open(os.path.join(APP_CLUSTER, name)) as f:
-            return f.read().strip()
-    return read("url"), {"Authorization": "Bearer " + read("token")}, \
-        ssl.create_default_context(cafile=os.path.join(APP_CLUSTER, "ca.crt"))
-
-
-def _kube(path):
-    """앱 클러스터 API 읽기 (GET)."""
-    url, headers, tls = _app_cluster()
-    with urllib.request.urlopen(urllib.request.Request(url + path, headers=headers), timeout=10, context=tls) as r:
-        body = r.read().decode()
-        return json.loads(body) if r.headers.get_content_type() == "application/json" else body
-
-
-def _patch(path, body, content_type):
-    """앱 클러스터 API 쓰기 (PATCH). 할 수 있는 조치 · 이름은 RBAC가 정한다 (Azure는 #8 2단계 전까지 쓰기 권한 없음)."""
-    url, headers, tls = _app_cluster()
-    req = urllib.request.Request(url + path, data=json.dumps(body).encode(), method="PATCH",
-                                 headers={**headers, "Content-Type": content_type})
-    with urllib.request.urlopen(req, timeout=10, context=tls) as r:
-        return json.load(r)
+# 앱 클러스터 읽기 · 쓰기. 할 수 있는 조치 · 이름은 RBAC가 정한다 (Azure는 #10 실험 시작 전까지 쓰기 권한 없음)
+_kube, _patch = appcluster.get, appcluster.patch
 
 
 def _prom(query):

@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
@@ -81,3 +82,36 @@ def test_index_page_shows_ranked_repos():
 def test_no_write_routes():
     writes = [r.path for r in app.routes if set(getattr(r, "methods", ())) & {"POST", "PUT", "PATCH", "DELETE"}]
     assert writes == []
+
+
+# --- 장애 스위치 (#10): 주입기가 켜면 화면 요청(/ · /api/trending)만 느려지거나 5xx. 검사 주소는 그대로 ---
+
+def test_fault_switch_breaks_only_the_user_pages_and_the_sli_sees_it(tmp_path, monkeypatch):
+    switch = tmp_path / "fault.json"
+    monkeypatch.setenv("FAULT_FILE", str(switch))
+    errors0 = _latency_bucket("/api/trending", "500", "+Inf") or 0
+    switch.write_text('{"error_rate": 1.0}')
+    assert client.get("/api/trending").status_code == 500
+    assert client.get("/healthz").status_code == 200   # 검사 주소는 건드리지 않는다
+    assert _latency_bucket("/api/trending", "500", "+Inf") == errors0 + 1   # 경보 식이 세는 그 칸
+    switch.write_text("{}")
+    assert client.get("/api/trending").status_code == 200   # 끄면 바로 정상
+
+
+def test_fault_switch_delays_the_user_pages(tmp_path, monkeypatch):
+    switch = tmp_path / "fault.json"
+    monkeypatch.setenv("FAULT_FILE", str(switch))
+    switch.write_text('{"delay": 0.3}')
+    start = time.perf_counter()
+    assert client.get("/api/trending").status_code == 200
+    assert time.perf_counter() - start >= 0.3
+    start = time.perf_counter()
+    client.get("/healthz")
+    assert time.perf_counter() - start < 0.3
+
+
+def test_bad_deploy_fault_comes_from_the_deployment_env(monkeypatch, tmp_path):
+    # "나쁜 배포": 주입기가 웹 배포 설정에 FAULT를 넣는다 → 롤백하면 사라진다
+    monkeypatch.setenv("FAULT_FILE", str(tmp_path / "none.json"))
+    monkeypatch.setenv("FAULT", '{"error_rate": 1.0}')
+    assert client.get("/").status_code == 500

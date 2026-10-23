@@ -1,0 +1,53 @@
+# 장애 주입기(#10, 운영 VM chaos)가 이 클러스터에 장애를 넣는 계정. 주입에 필요한 것만:
+# 파드 지우기(웹 · DB 파드 종료) · 웹 배포 고치기(나쁜 배포 / 되돌리기) · 수집기 멈춤 · 웹 장애 스위치.
+# Secret 읽기 · 다른 이름 · 다른 네임스페이스는 없다 → deploy/check-chaos-rbac.sh로 확인
+# 운영 AI 계정(ops-ai)은 ConfigMap을 못 읽어 스위치 내용(정답)을 모른다. 토큰은 운영 VM chaos/app-cluster로 옮긴다 (infra/azure/chaos-secrets.ps1)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chaos
+automountServiceAccountToken: false   # 이 클러스터의 파드가 쓰는 계정이 아니다
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: chaos
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list, delete]              # 가장 새 웹 · DB 파드를 골라 지운다 (이름이 매번 달라 이름 제한을 못 건다)
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [web]
+    verbs: [get, patch]                # 나쁜 배포 (FAULT 환경 변수) / 되돌리기 · 배포 직후인지 확인
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    resourceNames: [collector]
+    verbs: [get, patch]                # 수집 멈춤 / 되돌리기
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [web-fault]
+    verbs: [get, patch]                # 웹 장애 스위치 (지연 · 5xx)
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: chaos
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: chaos}
+subjects:
+  - {kind: ServiceAccount, name: chaos, namespace: banjjak}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: chaos-token
+  annotations:
+    kubernetes.io/service-account.name: chaos
+type: kubernetes.io/service-account-token
+---
+# 웹 장애 스위치. 값(data)은 매니페스트에 두지 않는다: 주입기가 patch로 넣고, kubectl apply는 손대지 않는다
+# (배포할 때마다 실험이 초기화되지 않게). 웹은 /etc/fault/fault.json으로 읽는다 (없거나 비면 장애 없음)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-fault

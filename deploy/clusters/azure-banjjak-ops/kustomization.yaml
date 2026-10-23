@@ -1,7 +1,8 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# 운영 VM: 관측 · 알림 · 운영 AI · Grafana
+# 운영 VM: 관측 · 알림 · 운영 AI · Grafana · 장애 주입기
 resources:
   - ../../ops
   - ../../opsai
   - ../../grafana
+  - ../../chaos

@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# 장애 주입기 (#10). 운영 VM 묶음(deploy/clusters/<context>)에 넣는다
+namespace: chaos
+resources:
+  - chaos.yaml
+images:
+  - name: banjjak
+    newName: ghcr.io/gongbugi/banjjak
+    newTag: latest   # 실제 배포는 deploy/apply.sh가 커밋 SHA로 고정한다
