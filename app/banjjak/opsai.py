@@ -115,7 +115,7 @@ def report(r, row, hands):
     return "\n".join(lines)
 
 
-# 앱 클러스터 읽기 · 쓰기. 할 수 있는 조치 · 이름은 RBAC가 정한다 (Azure는 #10 실험 시작 전까지 쓰기 권한 없음)
+# 앱 클러스터 읽기 · 쓰기. 할 수 있는 조치 · 이름은 RBAC가 정한다 (deploy/opsai-act)
 _kube, _patch = appcluster.get, appcluster.patch
 
 

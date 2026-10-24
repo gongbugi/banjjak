@@ -6,3 +6,9 @@ resources:
   - ../../opsai
   - ../../grafana
   - ../../chaos
+configMapGenerator:
+  # 운영 AI 조치를 실제로 실행한다 (2026-10-24 구간 2 시작과 함께, 앱 VM 쓰기 권한 opsai-act와 짝)
+  - name: ops-ai-env
+    namespace: ops-ai
+    behavior: replace
+    literals: [cluster=azure, actions=execute]

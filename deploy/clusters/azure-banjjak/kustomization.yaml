@@ -1,8 +1,10 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+# 앱 VM. 운영 AI 조치(쓰기) 권한은 2026-10-24 구간 2(장애 실험) 시작과 함께 넣었다 (본인 결정: #10과 함께 켠다)
 resources:
   - ../../k8s
   - ../../agent
+  - ../../opsai-act
 configMapGenerator:
   - name: agent-target
     namespace: agent

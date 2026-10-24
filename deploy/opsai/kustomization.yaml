@@ -5,7 +5,7 @@ resources:
   - opsai.yaml
 configMapGenerator:
   # 보고에 밝히는 클러스터 이름 · 조치 실행 여부. 로컬은 deploy/clusters/k3d-banjjak에서 바꾼다 (같은 Slack 채널을 쓴다)
-  # actions: Azure는 Slack 버튼(#8 2단계) 전까지 dry-run (쓰기 권한 deploy/opsai-act도 넣지 않는다)
+  # actions: 기본은 안전한 dry-run. 실행하는 클러스터는 묶음에서 바꾼다 (로컬 k3d · Azure 운영 VM, 쓰기 권한 opsai-act와 짝)
   - name: ops-ai-env
     literals: [cluster=azure, actions=dry-run]
 images:
