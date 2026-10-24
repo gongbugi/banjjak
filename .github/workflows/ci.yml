@@ -51,6 +51,8 @@ jobs:
           title() { amtool template render --template.glob=/d/ops/slack.tmpl --template.text='{{ template "banjjak.slack.title" . }}' --template.data="/d/ops/$1"; }
           got=$(title slack_test_firing.json);   echo "$got"; test "$got" = "🔴 울림 [azure] · DataStale"
           got=$(title slack_test_resolved.json); echo "$got"; test "$got" = "🟢 풀림 [local-k3d] · DataStale"
+      # 공급 실측 계단(#11): 멈춤 규칙 (가짜 docker로, 실제 부하는 비공개 레포의 load 워크플로가 넣는다)
+      - run: bash deploy/load/ladder_test.sh
 
   image:
     needs: [test, rules]
