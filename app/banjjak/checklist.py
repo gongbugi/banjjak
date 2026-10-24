@@ -18,7 +18,7 @@ CAUSES = {
     "db_down": "DB 파드가 준비되지 않았다",
     "web_down": "준비된 웹 파드가 없다",
     "recent_deploy": "최근 배포 직후다",
-    "traffic_surge": "요청이 1시간 전보다 크게 늘었다",
+    "traffic_surge": "요청이 1시간 전보다 크게 늘었다 (웹 파드는 HPA가 최대 2까지 늘린다)",
     "collector_suspended": "수집기 CronJob이 멈춰 있다 (suspend)",
     "collector_failing": "마지막 수집기 Job이 실패했다",
     "collector_late": "수집기가 2시간 넘게 성공하지 못했다",

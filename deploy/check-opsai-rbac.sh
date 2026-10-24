@@ -20,7 +20,7 @@ check no patch cronjobs.batch/backup banjjak
 # 조치 표의 쓰기: execute 클러스터에서만 yes
 act=no; [ "$mode" = execute ] && act=yes
 check $act patch deployments.apps/web banjjak
-check $act patch deployments.apps/web banjjak --subresource=scale
+check no patch deployments.apps/web banjjak --subresource=scale   # 레플리카는 HPA가 맡는다 (#11)
 check $act patch cronjobs.batch/collector banjjak
 check $act patch cronjobs.batch/analyzer banjjak
 # 다른 네임스페이스 전부 (장애 주입 chaos는 #10 전이라 없어도 확인한다)

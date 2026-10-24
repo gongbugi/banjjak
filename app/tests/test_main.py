@@ -1,15 +1,22 @@
 import time
 from datetime import datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY, generate_latest
+from sqlalchemy import text
 
-from banjjak import db
+from banjjak import db, main
 from banjjak.collect import collect_once
 from banjjak.main import app
 from banjjak.probe import USER_AGENT as PROBE_AGENT
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _empty_cache():
+    main._cache.clear()   # 앞 테스트의 화면이 남지 않게
 
 
 def test_healthz():
@@ -115,3 +122,58 @@ def test_bad_deploy_fault_comes_from_the_deployment_env(monkeypatch, tmp_path):
     monkeypatch.setenv("FAULT_FILE", str(tmp_path / "none.json"))
     monkeypatch.setenv("FAULT", '{"error_rate": 1.0}')
     assert client.get("/").status_code == 500
+
+
+# --- 응답 캐시 (#11): 급증 때 같은 화면을 다시 쓴다 (데이터는 매시간 바뀐다). 파드 메모리 60초 · 정상 응답만 ---
+
+class Clock:
+    """main이 보는 시계만 바꾼다. 요청 시간 재기(perf_counter)는 진짜 그대로"""
+    perf_counter = staticmethod(time.perf_counter)
+
+    def __init__(self):
+        self.t = 1000.0
+
+    def monotonic(self):
+        return self.t
+
+
+def test_user_pages_are_reused_for_a_minute(monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(main, "time", clock)
+    _seed()
+    api, page = client.get("/api/trending"), client.get("/")
+    with db.engine().begin() as conn:
+        conn.execute(text("TRUNCATE analyses, readmes, star_snapshots, repos"))   # DB가 바뀌어도
+    clock.t += 59
+    again_api, again_page = client.get("/api/trending"), client.get("/")
+    assert again_api.json() == api.json() and again_page.text == page.text   # 1분 안에는 같은 화면
+    assert again_api.headers["content-type"] == "application/json"
+    assert again_page.headers["content-type"].startswith("text/html")
+    clock.t += 2
+    assert client.get("/api/trending").json()["items"] == []   # 1분이 지나면 다시 만든다
+    assert "x/rocket" not in client.get("/").text
+
+
+def test_failed_pages_are_not_cached(monkeypatch):
+    # 만들다 실패한 응답(DB 오류 등)은 담지 않는다 → 다음 요청이 다시 만든다
+    _seed()
+    real = main._snapshot
+
+    def broken():
+        raise RuntimeError("DB 끊김")
+
+    monkeypatch.setattr(main, "_snapshot", broken)
+    with pytest.raises(RuntimeError):
+        client.get("/api/trending")
+    monkeypatch.setattr(main, "_snapshot", real)
+    assert client.get("/api/trending").json()["items"][0]["full_name"] == "x/rocket"
+
+
+def test_fault_switch_still_breaks_cached_pages(monkeypatch, tmp_path):
+    # 장애 스위치는 캐시 앞에서 걸린다 → 주입한 5xx · 지연이 캐시에 가려지지 않는다
+    monkeypatch.setenv("FAULT_FILE", str(tmp_path / "none.json"))
+    _seed()
+    assert client.get("/").status_code == 200 and client.get("/api/trending").status_code == 200   # 캐시에 담김
+    monkeypatch.setenv("FAULT", '{"error_rate": 1.0}')
+    assert client.get("/").status_code == 500
+    assert client.get("/api/trending").status_code == 500

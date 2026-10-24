@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: web
 spec:
-  replicas: 1
+  # replicas는 두지 않는다: HPA(아래)가 정한다. 여기 두면 배포(apply)마다 1로 되돌린다
   selector:
     matchLabels: {app: web}
   template:
@@ -56,6 +56,20 @@ spec:
       volumes:
         - name: fault                  # 장애 주입 스위치 (#10). 웹이 요청마다 /etc/fault/fault.json을 읽는다 (바뀌면 1분 안에 들어온다)
           configMap: {name: web-fault, optional: true}
+---
+# 급증 때 웹 파드를 2개까지 (#11). VM이 2 vCPU이고 uvicorn 프로세스 하나는 코어 하나만 쓴다 → 2가 천장
+# 기준은 CPU 요청값 대비 사용률이다. 요청값(지금 50m)은 #11 1차 측정(포화 때 웹 CPU)에서 정해 같이 배포한다
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: web}
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}
 ---
 apiVersion: v1
 kind: Service

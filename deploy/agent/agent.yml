@@ -16,6 +16,16 @@ scrape_configs:
       - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
       - {source_labels: [__meta_kubernetes_pod_label_app], target_label: app}
 
+  # 입구(k3s 기본 Traefik). 웹 지표에는 입구가 직접 낸 응답(요청 제한 429 · 배포 때 502)이 안 잡힌다 (#11)
+  - job_name: traefik
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: {names: [kube-system]}
+    relabel_configs:
+      - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], regex: traefik, action: keep}
+      - {source_labels: [__meta_kubernetes_pod_container_port_name], regex: metrics, action: keep}
+      - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+
   # 에이전트 자신. 보내기 실패(prometheus_remote_storage_*)를 운영 쪽에서 본다
   - job_name: agent
     static_configs: [{targets: ["localhost:9090"]}]

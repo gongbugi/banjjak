@@ -11,10 +11,7 @@ rules:
     resources: [deployments]           # 롤백
     resourceNames: [web]
     verbs: [patch]
-  - apiGroups: [apps]
-    resources: [deployments/scale]     # 레플리카 1 → 2
-    resourceNames: [web]
-    verbs: [patch]
+  # 레플리카(deployments/scale)는 없다: HPA가 맡는다 (#11, 2026-10-24 레플리카 조치를 조치 표에서 뺐다)
   - apiGroups: [batch]
     resources: [cronjobs]              # 멈춘 CronJob 재개
     resourceNames: [collector, analyzer]

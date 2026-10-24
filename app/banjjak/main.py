@@ -3,12 +3,14 @@ import json
 import os
 import random
 import re
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from prometheus_client import REGISTRY, Histogram
 from prometheus_client.core import GaugeMetricFamily
@@ -150,14 +152,40 @@ def _snapshot():
         return (updated.isoformat() if updated else None), items, weekly_tally(conn, _now())
 
 
+# 화면 응답 캐시 (#11): 데이터는 매시간 바뀐다 → 급증 때 같은 응답을 다시 쓴다. 바뀐 데이터는 늦어도 1분 안에 보인다
+CACHE_FOR = 60
+_cache, _cache_lock = {}, threading.Lock()
+
+
+def _cached(key, build):
+    """응답 본문을 파드 메모리에 CACHE_FOR초 둔다. 만들다 예외가 나면 담지 않는다 → 정상 응답만 담긴다.
+    장애 스위치(_fault)는 라우팅 의존성이라 이보다 먼저 걸린다 (주입한 장애가 캐시에 가려지지 않는다)."""
+    hit = _cache.get(key)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    with _cache_lock:   # 만료 순간 몰린 요청이 다 같이 DB에 가지 않게 하나만 만든다
+        hit = _cache.get(key)
+        if not (hit and hit[0] > time.monotonic()):
+            hit = _cache[key] = (time.monotonic() + CACHE_FOR, build())
+        return hit[1]
+
+
+def _api_body():
+    updated_at, items, week = _snapshot()
+    return JSONResponse(jsonable_encoder({"updated_at": updated_at, "items": items, "week": week})).body
+
+
 @app.get("/api/trending", dependencies=[Depends(_fault)])
 def api_trending():
-    updated_at, items, week = _snapshot()
-    return {"updated_at": updated_at, "items": items, "week": week}
+    return Response(_cached("api", _api_body), media_type="application/json")
 
 
 @app.get("/", dependencies=[Depends(_fault)])
 def index(request: Request):
+    return HTMLResponse(_cached("index", lambda: _index_body(request)))
+
+
+def _index_body(request):
     updated_at, items, week = _snapshot()
     basis = datetime.fromisoformat(updated_at).astimezone(KST) if updated_at else None
     basis_text = f"{basis.year}년 {basis.month}월 {basis.day}일 {basis:%H:%M} 기준 (한국 시간)" if basis else None
@@ -165,4 +193,5 @@ def index(request: Request):
     top = max((i["stars_per_day"] for i in items), default=0)
     for i in items:
         i["glow"] = round(0.35 + 0.65 * (i["stars_per_day"] / top) ** 0.5, 2) if top > 0 else 0.35
-    return templates.TemplateResponse(request, "index.html", {"basis": basis_text, "items": items, "week": week})
+    # 템플릿은 요청(주소 · 헤더)을 쓰지 않는다 → 누구에게나 같은 HTML이라 캐시해도 된다
+    return templates.TemplateResponse(request, "index.html", {"basis": basis_text, "items": items, "week": week}).body

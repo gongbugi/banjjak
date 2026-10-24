@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
-from banjjak.actions import Hands, connect, decide
+from banjjak.actions import PLAN, Hands, connect, decide
 from banjjak.opsai import app, handle, on_click
 from banjjak.opsai import tick as ops_tick
 
@@ -394,12 +394,15 @@ def test_rollback_does_not_undo_its_own_rollback(tmp_path):
     assert "실패" in ops.sent[-1] and "사람" in ops.sent[-1]
 
 
-def test_traffic_surge_scales_web_to_two(tmp_path):
+def test_traffic_surge_is_reported_without_action(tmp_path):
+    # 레플리카는 HPA가 맡는다 (#11, 최대 2). 운영 AI가 늘려도 HPA가 바로 덮어쓴다 → 조치 없이 사람에게 보고
     rps = lambda q: (0.4 if "offset 1h" in q else 6.0) if "duration_seconds_count" in q else None
     ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster()), rps)
-    assert ops.alert("WebLatencyP95High")["action"] == "scale_web"
+    row = ops.alert("WebLatencyP95High")
+    assert (row["cause"], row["action"], row["state"]) == ("traffic_surge", None, "human")
     ops.tick(NOW + timedelta(minutes=5))
-    assert ops.patched == [(f"/apis/apps/v1{NS}/deployments/web/scale", {"spec": {"replicas": 2}})]
+    assert ops.patched == []
+    assert "조치: 없음" in ops.sent[-1] and "HPA" in ops.sent[-1]
 
 
 # --- 확인 (#9): 실행한 조치 뒤 경보가 풀렸나 · 안 풀리면 재진단 1회 · 악화면 바로 사람 ---
@@ -442,32 +445,35 @@ def test_recovered_when_the_alert_clears(tmp_path):
 
 
 def test_not_recovered_leads_to_one_rediagnosis(tmp_path):
-    # 레플리카를 늘렸는데 10분 안에 안 풀렸고, 그사이 새 배포가 보인다 → 재진단은 다른 조치(롤백)를 고른다
-    prom = Prom(alert=1.0, rps=(6.0, 0.4))
-    state = cluster()
+    # 수집기를 재개했는데 70분 안에 안 풀렸고, 그사이 앱 클러스터가 아무 답도 안 한다 → 재진단은 다른 조치(앱 VM 재시작)를 고른다
+    prom = Prom(alert=1.0)
+    state = cluster(suspend=True)
     ops = Ops(str(tmp_path / "opsai.db"), fake_kube(state), prom)
-    assert ops.alert("WebLatencyP95High")["action"] == "scale_web"
+    assert ops.alert("DataStale")["action"] == "resume_collector"
     ops.tick(NOW + timedelta(minutes=5))   # 실행
-    state[f"/apis/apps/v1{NS}/deployments/web"]["status"]["conditions"][1]["lastUpdateTime"] = "2026-10-21T14:10:00Z"
-    ops.tick(NOW + timedelta(minutes=14))
+    state.clear()   # 앱 클러스터가 조용해졌다
+    ops.tick(NOW + timedelta(minutes=74))
     assert ops.checks() == [(1, "checking")]   # 아직 확인 시간 안
-    ops.tick(NOW + timedelta(minutes=15))   # 실행 10분 뒤에도 울린다
+    ops.tick(NOW + timedelta(minutes=75))   # 실행 70분 뒤에도 울린다
     assert ops.checks() == [(1, "not_recovered")]
     assert any("🔁 안 먹힘 → 재진단" in s for s in ops.sent)
-    assert ops.states()[-1] == ("rollback_web", "T1", "waiting")   # 재진단 기록
-    assert "앞선 조치: 기록 #1 웹 레플리카를 2개로" in ops.sent[-1]
+    assert ops.states()[-1] == ("restart_app_vm", "T2", "waiting")   # 재진단 기록
+    assert "앞선 조치: 기록 #1 수집기 CronJob 재개" in ops.sent[-1]
 
 
-def test_a_rediagnosed_action_that_also_fails_goes_to_a_human(tmp_path):
+def test_a_rediagnosed_action_that_also_fails_goes_to_a_human(tmp_path, monkeypatch):
+    # 지금 조치 표에는 재진단이 "다른 T1 조치"로 가는 길이 없다 (급증 → 레플리카 2를 #11에서 뺐다).
+    # #20 진단기는 고를 수 있으니 표를 바꿔 끼워 "재진단은 한 번뿐"을 지킨다
+    monkeypatch.setitem(PLAN, "traffic_surge", "resume_collector")
     prom = Prom(alert=1.0, rps=(6.0, 0.4))
     state = cluster()
     ops = Ops(str(tmp_path / "opsai.db"), fake_kube(state), prom)
     ops.alert("WebLatencyP95High")
     ops.tick(NOW + timedelta(minutes=5))
-    state[f"/apis/apps/v1{NS}/deployments/web"]["status"]["conditions"][1]["lastUpdateTime"] = "2026-10-21T14:10:00Z"
-    ops.tick(NOW + timedelta(minutes=15))   # 재진단 → 롤백 대기
-    ops.tick(NOW + timedelta(minutes=20))   # 롤백 실행
-    ops.tick(NOW + timedelta(minutes=30))   # 롤백 10분 뒤에도 울린다
+    state[f"/apis/apps/v1{NS}/deployments/web"]["status"]["conditions"][1]["lastUpdateTime"] = "2026-10-21T15:00:00Z"
+    ops.tick(NOW + timedelta(minutes=75))   # 70분 뒤에도 울린다 → 재진단 → 롤백 대기
+    ops.tick(NOW + timedelta(minutes=80))   # 롤백 실행
+    ops.tick(NOW + timedelta(minutes=90))   # 롤백 10분 뒤에도 울린다
     assert ops.checks() == [(1, "not_recovered"), (2, "not_recovered")]
     assert "재진단한 조치도 안 먹힘 → 사람이 봐 주세요" in ops.sent[-1]
     assert len(ops.states()) == 2   # 재진단은 한 번뿐

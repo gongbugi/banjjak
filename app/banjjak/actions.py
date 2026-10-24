@@ -22,15 +22,14 @@ KST = timezone(timedelta(hours=9))
 # 조치 → (등급, 사람이 읽을 이름)
 ACTIONS = {
     "rollback_web": ("T1", "웹을 이전 이미지로 롤백"),
-    "scale_web": ("T1", "웹 레플리카를 2개로"),
     "resume_collector": ("T1", "수집기 CronJob 재개"),
     "resume_analyzer": ("T1", "분석기 CronJob 재개"),
     "restart_app_vm": ("T2", "앱 VM 재시작"),
 }
 # 원인 → 조치. 없으면 조치 없이 사람에게 (Job 다시 돌리기 · 재시작을 고르지 않는 이유는 #8 변경 기록)
+# 급증(traffic_surge)도 조치 없음: 레플리카는 HPA가 맡는다 (#11, 최대 2). 운영 AI가 늘려도 HPA가 바로 덮어쓴다
 PLAN = {
     "recent_deploy": "rollback_web",
-    "traffic_surge": "scale_web",
     "collector_suspended": "resume_collector",
     "analyzer_suspended": "resume_analyzer",
     "app_unreachable": "restart_app_vm",
@@ -39,7 +38,6 @@ PLAN = {
 # 확인 시간: 조치 → 경보가 풀리기를 기다리는 시간 (🟡 2026-10-22 Claude 제안, 장애 실험 실측으로 다시 본다)
 VERIFY = {
     "rollback_web": timedelta(minutes=10),       # 파드 교체 약 1분 + 경보 식 5분 창이 비워지는 시간 + 여유
-    "scale_web": timedelta(minutes=10),
     "resume_collector": timedelta(minutes=70),   # 다음 정시 수집까지 최대 60분 + 지표 반영
     "resume_analyzer": timedelta(minutes=90),    # 다음 :20 실행까지 최대 60분 + 실행 시간 (다음 Job 성공으로 본다)
 }
@@ -275,11 +273,6 @@ def _rollback_web(kube, patch):
     return f"판 {current} → {revision(prev)} ({tag})"
 
 
-def _scale_web(kube, patch):
-    patch(f"/apis/apps/v1{NS}/deployments/web/scale", {"spec": {"replicas": 2}}, MERGE)
-    return "웹 레플리카 2"
-
-
 def _resume(cronjob):
     def run(kube, patch):
         patch(f"/apis/batch/v1{NS}/cronjobs/{cronjob}", {"spec": {"suspend": False}}, MERGE)
@@ -288,5 +281,5 @@ def _resume(cronjob):
 
 
 # 앱 VM 재시작(T2)은 실행기가 없다: 운영 AI에 Azure 권한이 없어 승인돼도 사람이 한다
-RUN = {"rollback_web": _rollback_web, "scale_web": _scale_web,
+RUN = {"rollback_web": _rollback_web,
        "resume_collector": _resume("collector"), "resume_analyzer": _resume("analyzer")}

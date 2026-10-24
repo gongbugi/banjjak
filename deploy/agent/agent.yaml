@@ -29,6 +29,26 @@ roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-pod-reade
 subjects:
   - {kind: ServiceAccount, name: agent, namespace: agent}
 ---
+# 입구(Traefik) 지표를 긁으려고 kube-system 파드 목록도 본다 (#11). 읽기만, 긁는 대상은 agent.yml이 traefik으로 거른다
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-pod-reader
+  namespace: kube-system
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-pod-reader
+  namespace: kube-system
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-pod-reader}
+subjects:
+  - {kind: ServiceAccount, name: agent, namespace: agent}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
