@@ -2,9 +2,11 @@ import json
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from banjjak.actions import PLAN, Hands, connect, decide
+from banjjak.checklist import CHECKLISTS, diagnose, replay
 from banjjak.opsai import app, handle, on_click
 from banjjak.opsai import tick as ops_tick
 
@@ -652,3 +654,38 @@ def test_records_each_alert_and_diagnoses_the_firing_one(capsys):
 
 def test_healthz():
     assert client.get("/healthz").json() == {"status": "ok"}
+
+
+# --- 녹화 (#20 준비): 경보 순간 앱 클러스터 · Prometheus의 원래 응답을 남겨, 나중에 LLM 진단기를 같은 상태로 다시 돌린다 ---
+
+def tape_of(db, record_id):
+    with closing(connect(db)) as conn:
+        return json.loads(conn.execute("SELECT tape FROM snapshots WHERE record_id = ?", (record_id,)).fetchone()[0])
+
+
+def test_each_alert_keeps_a_tape_that_replays_every_checklist(tmp_path):
+    # LLM은 경보와 상관없이 어떤 도구든 고를 수 있다 → 녹화 하나로 모든 점검표가 그때와 똑같이 다시 돌아야 한다
+    db = str(tmp_path / "opsai.db")
+    kube, prom = fake_kube(cluster(analyze_ok=False)), Prom(rps=(6.0, 0.4))
+    row = Ops(db, kube, prom).alert("DataStale")
+    kube_, prom_ = replay(tape_of(db, row["id"]))
+    for kind in CHECKLISTS:
+        assert diagnose(kind, kube_, prom_, NOW) == diagnose(kind, kube, prom, NOW), kind
+
+
+def test_tape_keeps_the_last_job_logs_even_when_they_succeeded(tmp_path):
+    # 점검표는 실패한 Job 로그만 읽지만, LLM은 성공한 Job 로그도 볼 수 있다
+    db = str(tmp_path / "opsai.db")
+    row = Ops(db, fake_kube(cluster()), Prom()).alert("WebErrorRateHigh")
+    assert f"/api/v1{NS}/pods/collector-2-x7k/log?tailLines=50" in tape_of(db, row["id"])["kube"]
+
+
+def test_an_unreachable_cluster_is_taped_as_failed_reads(tmp_path):
+    db = str(tmp_path / "opsai.db")
+    row = Ops(db, fake_kube({}), Prom()).alert("DataStale")
+    kube_, prom_ = replay(tape_of(db, row["id"]))
+    replayed = diagnose("DataStale", kube_, prom_, NOW)
+    assert replayed["cause"] == row["cause"] == "app_unreachable"
+    assert replayed == diagnose("DataStale", fake_kube({}), Prom(), NOW)   # 실패 이유 문장까지 그대로
+    with pytest.raises(LookupError):
+        kube_("/api/v1/never-read")   # 녹화에 없는 읽기는 지어내지 않는다

@@ -39,9 +39,11 @@ def handle(alert, prom, now, conn, hands, after=None):
     after: 재진단이면 (안 먹힌 앞선 기록, 이유). "안 먹혔다"를 첫 증거로 남기고, 같은 조치를 또 고르면 사람에게."""
     kind = alert.get("labels", {}).get("alertname")
     sli, severity = KINDS.get(kind, (None, "unknown"))
+    tape, kube, prom_ = checklist.recorder(hands.kube, prom)
     record = {"event": "diagnosis", "cluster": hands.cluster, "at": now.isoformat(), "alertname": kind,
               "startsAt": alert.get("startsAt"), "fingerprint": alert.get("fingerprint"), "sli": sli,
-              "severity": severity, **checklist.diagnose(kind, hands.kube, prom, now)}
+              "severity": severity, **checklist.diagnose(kind, kube, prom_, now)}
+    checklist.sweep(kube, prom_, now)   # 이 점검표가 안 본 읽기까지 녹화 (#20 진단기를 같은 상태로 다시 돌린다)
     if after:
         before, reason = after
         record["after"] = before["id"]
@@ -50,6 +52,9 @@ def handle(alert, prom, now, conn, hands, after=None):
     print(json.dumps(record, ensure_ascii=False), flush=True)
     # 판단 기록도 이 행(diagnosis 칸)에 남는다 → #12 채점이 읽는다
     row = actions.plan(conn, record, now, tried=after[0]["action"] if after else None)
+    conn.execute("INSERT INTO snapshots (record_id, taken, tape) VALUES (?, ?, ?)",
+                 (row["id"], now.timestamp(), json.dumps(tape, ensure_ascii=False)))
+    conn.commit()
     hands.slack(message(report(record, row, hands), row, hands))
     return {**record, **{k: row[k] for k in ("id", "action", "tier", "state")}}
 

@@ -210,3 +210,51 @@ CHECKLISTS = {
     "DataAgeMissing": _data_age_missing,
     "AnalysisSuccessLow": lambda ev, kube, prom, now: _batch(ev, kube, now, "analyzer", "분석기"),
 }
+
+
+# --- 녹화 · 재생 (#20 준비): 경보 순간의 원래 응답을 남겨, 나중에 LLM 진단기를 같은 상태 위에서 다시 돌린다 ---
+# 진단기를 바꿔도 같은 경보로 비교할 수 있다 (LLM을 켜기 전 경보 · 프롬프트를 바꾼 뒤 회귀 시험)
+
+FAILED = "__failed__"
+
+
+def recorder(kube, prom):
+    """읽기를 그대로 통과시키며 응답을 테이프에 남긴다. 같은 읽기를 또 하면 테이프 것을 준다 (한 경보 = 한 순간)."""
+    tape = {"kube": {}, "prom": {}}
+
+    def taped(part, read):
+        def read_(key):
+            if key not in tape[part]:
+                try:
+                    tape[part][key] = read(key)
+                except Exception as e:
+                    tape[part][key] = {FAILED: [type(e).__name__, str(e)]}
+            return _play(tape[part][key])
+        return read_
+    return tape, taped("kube", kube), taped("prom", prom)
+
+
+def replay(tape):
+    """테이프 → (kube, prom). 테이프에 없는 읽기는 지어내지 않고 실패한다 (진짜 API의 404처럼)."""
+    def play(part):
+        def read(key):
+            if key not in tape[part]:
+                raise LookupError(f"녹화에 없는 읽기 {key}")
+            return _play(tape[part][key])
+        return read
+    return play("kube"), play("prom")
+
+
+def _play(body):
+    if isinstance(body, dict) and FAILED in body:
+        name, message = body[FAILED]
+        raise type(name, (Exception,), {})(message)   # 원래 예외 이름 그대로 → 증거 문장("못 읽음 (…)")이 녹화 때와 같다
+    return body
+
+
+def sweep(kube, prom, now):
+    """모든 점검표의 읽기를 한 번씩 (LLM은 경보와 상관없이 어느 도구든 고를 수 있다) + 마지막 Job 로그는 성공해도."""
+    for check in CHECKLISTS.values():
+        check([], kube, prom, now)
+    for cronjob in ("collector", "analyzer"):
+        _see([], "", lambda: _job_log(kube, _last_job(kube, cronjob)[0]["name"]))

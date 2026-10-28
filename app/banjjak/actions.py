@@ -55,7 +55,9 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS records (
     state TEXT NOT NULL, due REAL, decided REAL, result TEXT, diagnosis TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS checks (
     record_id INTEGER PRIMARY KEY, until REAL NOT NULL, next REAL NOT NULL, count INTEGER NOT NULL DEFAULT 0,
-    before_err REAL, before_p95 REAL, state TEXT NOT NULL, decided REAL, result TEXT)"""
+    before_err REAL, before_p95 REAL, state TEXT NOT NULL, decided REAL, result TEXT);
+CREATE TABLE IF NOT EXISTS snapshots (
+    record_id INTEGER PRIMARY KEY, taken REAL NOT NULL, tape TEXT NOT NULL)"""
 
 
 class Hands(NamedTuple):
