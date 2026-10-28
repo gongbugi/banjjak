@@ -18,7 +18,8 @@ MAX_PAGES = 5        # 최대 500개 추적
 
 def collect_once(search, conn, now):
     """search(query, page) -> GitHub 검색 응답(dict). 기록한 레포 수를 돌려준다.
-    한 건도 못 받으면 실패로 끝낸다: GitHub은 장애 중에도 200 + 빈 결과를 줄 수 있다 (2026-10-23 00:00 · 01:00 KST).
+    한 건도 못 받았거나 잘린 결과면 실패로 끝낸다: GitHub은 장애 중에도 200 + 빈(또는 모자란) 결과를 줄 수 있다
+    (2026-10-23 00:00 · 01:00 KST 0건, 10-27 21:00 16건).
     그걸 "성공"으로 끝내면 Job · 하트비트는 정상인데 데이터만 묵는다 → 실패여야 재시도 · 하트비트 끊김 · 운영 AI 진단이 울린다."""
     since = (now - timedelta(days=WINDOW_DAYS)).date().isoformat()
     query = f"created:>={since} stars:>={MIN_STARS}"
@@ -39,6 +40,11 @@ def collect_once(search, conn, now):
                 repo_id=it["id"], captured_at=now, stars=it["stargazers_count"]).on_conflict_do_nothing())
         count += len(items)
         if len(items) < PER_PAGE:
+            # 모자란 쪽 = 보통은 마지막 쪽. 그런데 GitHub이 "다 못 돌았다"고 하면 결과가 잘린 것이다 (2026-10-27 21:00: 16건)
+            # → 그 회차를 실패로 (트랜잭션이 되돌려져 이전 수집이 화면에 남는다). 다 찬 쪽은 표시가 떠도 쓴다
+            if body.get("incomplete_results"):
+                raise RuntimeError(f"GitHub 검색 {page}쪽이 {len(items)}건인데 다 못 돌았다고 한다 ({seen}) "
+                                   "→ 잘린 결과를 성공으로 저장하지 않는다")
             break
     if count == 0:
         raise RuntimeError(f"GitHub 검색이 0건을 돌려줬다 ({seen}) → 빈 결과를 성공으로 저장하지 않는다")

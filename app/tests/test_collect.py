@@ -79,9 +79,23 @@ def test_empty_search_fails_the_run_instead_of_storing_nothing():
 def test_each_page_logs_whether_github_trusts_its_result(capsys):
     full = [item(i, f"o/r{i}", 500 - i, "2026-10-10T00:00:00Z") for i in range(100)]
     pages = {1: {"items": full, "total_count": 4321, "incomplete_results": False},
-             2: {"items": full[:30], "total_count": 4321, "incomplete_results": True}}
+             2: {"items": full[:30], "total_count": 4321, "incomplete_results": False}}
     with db.engine().begin() as conn:
         assert collect_once(lambda q, p: pages[p], conn, NOW) == 130
     lines = capsys.readouterr().out.splitlines()
     assert lines == ["search page 1: 100 items · total_count=4321 · incomplete_results=False",
-                     "search page 2: 30 items · total_count=4321 · incomplete_results=True"]
+                     "search page 2: 30 items · total_count=4321 · incomplete_results=False"]
+
+
+# 2026-10-27 21:00 KST: GitHub이 1쪽에 16건만 주며 incomplete_results=True (total_count=1659). 수집기는 "마지막 쪽"으로 보고
+# 16건만 저장한 채 성공으로 끝났다 → 화면 순위가 16개. 모자란 쪽이 "다 못 돌았다"고 표시되면 그 회차를 실패로 (이전 수집이 남는다)
+def test_a_short_page_marked_incomplete_fails_the_run():
+    pages = {1: {"items": [item(i, f"o/r{i}", 500 - i, "2026-10-10T00:00:00Z") for i in range(100)],
+                 "total_count": 1659, "incomplete_results": True},   # 다 찬 쪽은 표시가 떠도 쓴다 (10-27 20:00: 500건 정상)
+             2: {"items": [item(100 + i, f"o/s{i}", 300 - i, "2026-10-10T00:00:00Z") for i in range(16)],
+                 "total_count": 1659, "incomplete_results": True}}
+    with pytest.raises(RuntimeError, match=r"2쪽.*16건.*incomplete_results=True"):
+        with db.engine().begin() as conn:
+            collect_once(lambda q, p: pages[p], conn, NOW)
+    with db.engine().connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM star_snapshots")).scalar() == 0   # 앞쪽 100건도 저장하지 않는다

@@ -46,7 +46,8 @@ spec:
             preStop:
               sleep: {seconds: 10}
           resources:
-            requests: {cpu: 50m, memory: 96Mi}
+            # CPU 375m: HPA 기준(70%)이 포화의 약 절반에서 걸리게. #11 1차 측정 포화 계단 웹 CPU 535m × 0.7 (측정 전에 정한 규칙)
+            requests: {cpu: 375m, memory: 96Mi}
             limits: {memory: 256Mi}
           securityContext:
             allowPrivilegeEscalation: false
@@ -58,7 +59,7 @@ spec:
           configMap: {name: web-fault, optional: true}
 ---
 # 급증 때 웹 파드를 2개까지 (#11). VM이 2 vCPU이고 uvicorn 프로세스 하나는 코어 하나만 쓴다 → 2가 천장
-# 기준은 CPU 요청값 대비 사용률이다. 요청값(지금 50m)은 #11 1차 측정(포화 때 웹 CPU)에서 정해 같이 배포한다
+# 기준은 CPU 요청값 대비 사용률이다. 요청값 375m은 #11 1차 측정(포화 때 웹 CPU)에서 정했다 (Deployment 쪽 주석)
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
