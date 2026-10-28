@@ -12,3 +12,15 @@ configMapGenerator:
     namespace: ops-ai
     behavior: replace
     literals: [cluster=azure, actions=execute]
+patches:
+  # 고빈도 구간 (10-28 본인 결정 B): AI를 켜기 전까지 주입 사이 최소 4시간 · 그 뒤 10분마다 1/3 (평균 30분 안에)
+  # 가장 오래 걸리는 수집 멈춤(탐지 2시간 → 재개 → 다음 수집)도 4시간 안에 끝나 앞 장애와 안 겹친다
+  # AI 켤 때 이 패치를 지우고 배포한다 → 원래 값 (간격 12시간 · 주 5회). 시작 · 끝 시각은 볼트 MOC
+  - target: {kind: CronJob, name: injector}
+    patch: |-
+      - op: add
+        path: /spec/jobTemplate/spec/template/spec/containers/0/env/-
+        value: {name: CHAOS_GAP_HOURS, value: "4"}
+      - op: add
+        path: /spec/jobTemplate/spec/template/spec/containers/0/env/-
+        value: {name: CHAOS_CHANCE, value: "0.333"}

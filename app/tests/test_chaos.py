@@ -175,3 +175,28 @@ def test_manual_mode_never_rolls_dice_but_tends_what_runs(tmp_path):
     chaos.inject("latency", dice=Dice(0.0, 0.0))
     assert chaos.answers()[0]["manual"] == 1
     assert chaos.run(NOW + timedelta(minutes=15), switch="manual") == "ended latency"
+
+
+def test_gap_and_chance_come_from_the_environment(tmp_path, monkeypatch):
+    # 고빈도 구간 (10-28 본인 결정 B): 이미지를 다시 만들지 않고 CronJob 환경 변수로 바꾼다. 없으면 원래 값
+    import importlib
+
+    import banjjak.chaos as chaos_module
+    try:
+        monkeypatch.delenv("CHAOS_GAP_HOURS", raising=False)
+        monkeypatch.delenv("CHAOS_CHANCE", raising=False)
+        importlib.reload(chaos_module)
+        assert chaos_module.MIN_GAP == timedelta(hours=12) and round(chaos_module.CHANCE * 7 * 24 * 6, 6) == 5
+        monkeypatch.setenv("CHAOS_GAP_HOURS", "4")
+        monkeypatch.setenv("CHAOS_CHANCE", "0.333")   # 10분마다 1/3 → 간격이 지나면 평균 30분 안에 넣는다
+        importlib.reload(chaos_module)
+        assert (chaos_module.MIN_GAP, chaos_module.CHANCE) == (timedelta(hours=4), 0.333)
+        chaos = Chaos(tmp_path)
+        chaos.inject("web_pod_kill")
+        chaos.run(NOW + timedelta(minutes=10))
+        assert chaos.run(NOW + timedelta(hours=3), Dice(HIT)) == "gap"
+        assert chaos.run(NOW + timedelta(hours=5), Dice(0.3, 0.3)).startswith("injected")   # 0.3 < 1/3
+    finally:
+        monkeypatch.delenv("CHAOS_GAP_HOURS", raising=False)
+        monkeypatch.delenv("CHAOS_CHANCE", raising=False)
+        importlib.reload(chaos_module)   # 다른 시험은 원래 값으로

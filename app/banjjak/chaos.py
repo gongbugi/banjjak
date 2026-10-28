@@ -9,6 +9,7 @@ Prometheus는 chaos를 긁지 않는다. 주입 사실은 어디에도 알리지
 실행: python -m banjjak.chaos [run | inject <종류> | status]
 """
 import json
+import os
 import random
 import sqlite3
 import sys
@@ -18,9 +19,11 @@ from typing import Callable, NamedTuple
 
 from banjjak.checklist import NS, _t
 
-CHANCE = 5 / (7 * 24 * 6)          # 10분마다 이 확률 → 평균 주 5회 (최소 간격 때문에 실제로는 조금 적다)
-                                   # 10-28 주 2.5회 → 5회: 11-20까지 약 9건으로는 종류별 탐지율을 말할 수 없다 (#12)
-MIN_GAP = timedelta(hours=12)
+# 10분마다 이 확률로 넣는다. 기본은 "주 5회" 확률 (10-28 주 2.5회 → 5회: 11-20까지 약 9건으로는 종류별 탐지율을 말할 수 없다)
+# 🧮 최소 간격이 지난 뒤 평균 대기 = 10분 / CHANCE → 기본값이면 약 33.6시간이라, 간격 12시간을 더해 실제로는 약 주 3.7회
+# 고빈도 구간(10-28 본인 결정 B, AI 켜기 전까지)은 CronJob 환경 변수로 바꾼다: 이미지를 다시 만들지 않는다
+CHANCE = float(os.environ.get("CHAOS_CHANCE", 5 / (7 * 24 * 6)))
+MIN_GAP = timedelta(hours=float(os.environ.get("CHAOS_GAP_HOURS", 12)))
 AFTER_DEPLOY = timedelta(minutes=30)
 WEIGHTS = {                         # 종류 → 가중치. 조치해야 풀리는 둘(나쁜 배포 · 수집 멈춤)이 40%
     "web_pod_kill": 1, "db_pod_kill": 1, "latency": 2, "errors": 2, "bad_deploy": 2, "collector_suspend": 2}
@@ -217,7 +220,9 @@ def main(argv):
             for r in conn.execute("SELECT * FROM injections ORDER BY id"):
                 print(dict(r))
         else:
-            print(f"switch={switch} · {run_once(conn, now, app, random, switch)}", flush=True)
+            # 설정도 남긴다: 고빈도 구간이 언제부터 언제까지였는지 로그로도 가린다
+            print(f"switch={switch} · {run_once(conn, now, app, random, switch)} · gap={MIN_GAP} · chance={CHANCE:.4f}",
+                  flush=True)
     ping(os.environ.get("HEARTBEAT_URL"))   # 한 바퀴를 마쳤다
 
 
