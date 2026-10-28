@@ -143,10 +143,14 @@ def _web(evidence, kube, now):
 
 # 사용자 화면만 센다 (경보 규칙과 같은 범위)
 REQS = 'sum(rate(banjjak_http_request_duration_seconds_count{{route=~"/|/api/trending"}}[5m]{}))'
+# 입구(Traefik)에서 센다 (#11): 요청 제한이 거절한 요청은 웹에 닿지 않아 웹 지표에는 안 보인다
+ENTRANCE = 'sum(rate(traefik_entrypoint_requests_total{{entrypoint="web"}}[5m]{}))'
+REJECTED = ('sum(rate(traefik_entrypoint_requests_total{entrypoint="web",code="429"}[5m]))'
+            ' / sum(rate(traefik_entrypoint_requests_total{entrypoint="web"}[5m]))')
 
 
-def _surge(prom):
-    now, before = prom(REQS.format("")) or 0.0, prom(REQS.format(" offset 1h")) or 0.0
+def _surge(prom, reqs=REQS):
+    now, before = prom(reqs.format("")) or 0.0, prom(reqs.format(" offset 1h")) or 0.0
     # 가정: 1시간 전의 3배 이상이면서 초당 1건 이상. 평소 요청이 거의 0이라 배수만 보면 몇 건에도 급증이 된다
     return {"surge": now >= 1 and now >= 3 * before}, f"{now:.2f} / {before:.2f} req/s"
 
@@ -157,6 +161,24 @@ def _latency(evidence, kube, prom, now):
     if cause:
         return cause
     return "traffic_surge" if traffic and traffic["surge"] else None
+
+
+def _rejected(evidence, kube, prom, now):
+    """입구 요청 제한(초당 320건)이 거절하고 있다. 급증이면 보고만 한다: 웹 파드는 HPA가 이미 늘린다 (#11)."""
+    traffic = _see(evidence, "입구 요청량 (지금 / 1시간 전)", lambda: _surge(prom, ENTRANCE))
+    _see(evidence, "입구 거절 비율 (429)", lambda: ({}, f"{prom(REJECTED):.0%}"))
+    _see(evidence, "웹 HPA", lambda: _hpa(kube))
+    _see(evidence, "웹 파드", lambda: _pods(kube, "web", now))
+    return "traffic_surge" if traffic and traffic["surge"] else None
+
+
+def _hpa(kube):
+    h = kube(f"/apis/autoscaling/v2{NS}/horizontalpodautoscalers/web")
+    st, spec = h.get("status", {}), h["spec"]
+    cpu = next((m["resource"]["current"].get("averageUtilization") for m in st.get("currentMetrics") or []
+                if m.get("type") == "Resource"), None)
+    saw = f"{st.get('currentReplicas', 0)}/{spec['maxReplicas']} 파드 (최소 {spec.get('minReplicas', 1)})"
+    return {"current": st.get("currentReplicas", 0), "max": spec["maxReplicas"]}, saw + (f" · CPU {cpu}%" if cpu is not None else "")
 
 
 def _arriving(prom):
@@ -209,6 +231,9 @@ CHECKLISTS = {
     "WebLatencyP95High": _latency,
     "DataAgeMissing": _data_age_missing,
     "AnalysisSuccessLow": lambda ev, kube, prom, now: _batch(ev, kube, now, "analyzer", "분석기"),
+    # #11 입구 경보: 거절(429)은 급증인지 보고, 입구 502 · 503(웹이 응답 못 함)은 웹 5xx와 같은 순서로 뿌리를 찾는다
+    "WebRequestsRejected": _rejected,
+    "EntranceErrorsHigh": lambda ev, kube, prom, now: _web(ev, kube, now),
 }
 
 

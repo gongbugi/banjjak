@@ -41,6 +41,28 @@ groups:
         annotations:
           summary: 최근 24시간 분석 성공률이 95% 아래다
 
+  # 입구(Traefik) 지표 (#11, 앱 VM 에이전트가 kube-system의 Traefik을 긁는다). 웹에 닿지 못한 요청은 웹 지표에 안 보인다
+  # 2분 창 + 2분 지속: 15분짜리 급증 · 몇 분짜리 웹 장애를 그 안에 잡는다 (SLI 경보는 5분 + 5분이라 약 10분 뒤에 운다)
+  - name: entrance
+    rules:
+      # 요청 제한(초당 320건)이 거절 중. 평소 요청은 초당 0.1건 남짓이라 1%만 넘어도 급증이다
+      - alert: WebRequestsRejected
+        expr: |
+          sum(rate(traefik_entrypoint_requests_total{entrypoint="web", code="429"}[2m]))
+            / sum(rate(traefik_entrypoint_requests_total{entrypoint="web"}[2m])) > 0.01
+        for: 2m
+        annotations:
+          summary: 입구가 요청 제한으로 거절(429)한 비율이 2분째 1%를 넘는다
+
+      # 웹이 죽거나 준비되지 않아 입구가 직접 오류를 낸다 (10-24 1차 측정: 3분 동안 응답 없음, 경보 0)
+      - alert: EntranceErrorsHigh
+        expr: |
+          sum(rate(traefik_entrypoint_requests_total{entrypoint="web", code=~"502|503|504"}[2m]))
+            / sum(rate(traefik_entrypoint_requests_total{entrypoint="web"}[2m])) > 0.05
+        for: 2m
+        annotations:
+          summary: 입구가 낸 502 · 503 · 504 비율이 2분째 5%를 넘는다 (웹이 응답하지 못한다)
+
   # 경보 길 자체의 생존 신호 (Watchdog). 늘 울리고, Alertmanager가 Better Stack 하트비트로만 보낸다.
   # 이 신호가 끊기면 Prometheus 규칙 검사 · Alertmanager 보내기 · 운영 VM 중 하나가 멈춘 것이다
   - name: meta

@@ -97,3 +97,68 @@ tests:
         alertname: Watchdog
         exp_alerts:
           - exp_annotations: {summary: 경보 길이 살아 있다 (늘 울린다)}
+
+  # 입구(Traefik)가 요청 제한으로 429를 낸다 (#11): 초당 10건 중 2건 거절 → 2분 창 + 2분 지속 뒤 울린다
+  - interval: 1m
+    input_series:
+      - series: 'traefik_entrypoint_requests_total{entrypoint="web", code="200", method="GET", protocol="http"}'
+        values: '0+600x20'
+      - series: 'traefik_entrypoint_requests_total{entrypoint="web", code="429", method="GET", protocol="http"}'
+        values: '0+120x20'
+    alert_rule_test:
+      - {eval_time: 2m, alertname: WebRequestsRejected, exp_alerts: []}   # 아직 2분을 못 버팀
+      - eval_time: 5m
+        alertname: WebRequestsRejected
+        exp_alerts:
+          - exp_annotations: {summary: 입구가 요청 제한으로 거절(429)한 비율이 2분째 1%를 넘는다}
+      - {eval_time: 5m, alertname: EntranceErrorsHigh, exp_alerts: []}   # 429는 웹이 못 닿은 게 아니다
+
+  # 거절 3%: 1% 기준이라 울린다 (5%로 느슨해지면 이 시험이 잡는다)
+  - interval: 1m
+    input_series:
+      - series: 'traefik_entrypoint_requests_total{entrypoint="web", code="200", method="GET", protocol="http"}'
+        values: '0+600x20'
+      - series: 'traefik_entrypoint_requests_total{entrypoint="web", code="429", method="GET", protocol="http"}'
+        values: '0+18x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: WebRequestsRejected
+        exp_alerts:
+          - exp_annotations: {summary: 입구가 요청 제한으로 거절(429)한 비율이 2분째 1%를 넘는다}
+
+  # 거절이 0.5%뿐 (순간 몰림): 울리지 않는다
+  - interval: 1m
+    input_series:
+      - series: 'traefik_entrypoint_requests_total{entrypoint="web", code="200", method="GET", protocol="http"}'
+        values: '0+600x20'
+      - series: 'traefik_entrypoint_requests_total{entrypoint="web", code="429", method="GET", protocol="http"}'
+        values: '0+3x20'
+    alert_rule_test:
+      - {eval_time: 10m, alertname: WebRequestsRejected, exp_alerts: []}
+
+  # 웹이 죽어 입구가 502 · 503을 낸다 (10-24 1차 측정: 3분 동안 응답 없음, 경보 0). 웹 지표에는 안 잡히는 오류
+  - interval: 1m
+    input_series:
+      - series: 'traefik_entrypoint_requests_total{entrypoint="web", code="200", method="GET", protocol="http"}'
+        values: '0+60x20'
+      - series: 'traefik_entrypoint_requests_total{entrypoint="web", code="502", method="GET", protocol="http"}'
+        values: '0+20x20'
+      - series: 'traefik_entrypoint_requests_total{entrypoint="web", code="503", method="GET", protocol="http"}'
+        values: '0+10x20'
+    alert_rule_test:
+      - {eval_time: 2m, alertname: EntranceErrorsHigh, exp_alerts: []}
+      - eval_time: 5m
+        alertname: EntranceErrorsHigh
+        exp_alerts:
+          - exp_annotations: {summary: 입구가 낸 502 · 503 · 504 비율이 2분째 5%를 넘는다 (웹이 응답하지 못한다)}
+
+  # 스캐너의 404가 아무리 많아도 입구 오류가 아니다
+  - interval: 1m
+    input_series:
+      - series: 'traefik_entrypoint_requests_total{entrypoint="web", code="200", method="GET", protocol="http"}'
+        values: '0+60x20'
+      - series: 'traefik_entrypoint_requests_total{entrypoint="web", code="404", method="GET", protocol="http"}'
+        values: '0+600x20'
+    alert_rule_test:
+      - {eval_time: 10m, alertname: EntranceErrorsHigh, exp_alerts: []}
+      - {eval_time: 10m, alertname: WebRequestsRejected, exp_alerts: []}

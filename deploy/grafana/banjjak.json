@@ -55,6 +55,14 @@
       "targets": [{"refId": "A", "legendFormat": "{{source}}",
         "expr": "sum by (source) (rate(banjjak_http_request_duration_seconds_count{route=~\"/|/api/trending\"}[5m]))"}],
       "fieldConfig": {"defaults": {"unit": "reqps", "noValue": "화면 요청 없음"}, "overrides": []}
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "입구 응답 코드 (Traefik): 429 요청 제한 · 502/503/504 웹 못 닿음",
+      "gridPos": {"x": 0, "y": 19, "w": 24, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [{"refId": "A", "legendFormat": "{{code}}",
+        "expr": "sum by (code) (rate(traefik_entrypoint_requests_total{entrypoint=\"web\"}[2m]))"}],
+      "fieldConfig": {"defaults": {"unit": "reqps", "noValue": "입구 지표 없음"}, "overrides": []}
     }
   ]
 }

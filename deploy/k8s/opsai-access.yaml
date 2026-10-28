@@ -1,4 +1,4 @@
-# 운영 AI(운영 VM)가 이 클러스터를 읽는 계정. banjjak 네임스페이스의 파드 · 로그 · 배포 · Job만 읽는다.
+# 운영 AI(운영 VM)가 이 클러스터를 읽는 계정. banjjak 네임스페이스의 파드 · 로그 · 배포 · Job · HPA만 읽는다.
 # Secret · 쓰기 · 다른 네임스페이스(장애 주입 포함)는 없다 → deploy/check-opsai-rbac.sh로 확인
 # 토큰은 운영 VM의 Secret app-cluster로 옮긴다 (infra/azure/opsai-secrets.ps1).
 # 조치(쓰기) 권한은 deploy/opsai-act에 따로 두고, 실행을 켠 클러스터 묶음에만 넣는다 (지금은 로컬 k3d만)
@@ -21,6 +21,9 @@ rules:
     verbs: [get, list]
   - apiGroups: [batch]
     resources: [jobs, cronjobs]
+    verbs: [get, list]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]   # #11 거절 경보: 웹 파드가 몇 개까지 늘었나 (읽기만)
     verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

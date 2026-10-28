@@ -30,6 +30,8 @@ KINDS = {
     "WebLatencyP95High": ("응답 p95 500ms", "warning"),
     "DataStale": ("데이터 신선도 2시간", "warning"),
     "AnalysisSuccessLow": ("분석 성공률 95%", "warning"),
+    "EntranceErrorsHigh": ("가용성 99% (입구)", "critical"),   # 웹이 응답 못 함: 웹 지표에는 안 잡힌다 (#11)
+    "WebRequestsRejected": ("요청 제한 초당 320건", "warning"),
 }
 
 

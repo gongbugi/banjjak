@@ -87,6 +87,10 @@ def cluster(*, suspend=False, collect_ok=True, collect_log="", last_success="202
         f"/api/v1{NS}/pods?labelSelector=job-name%3Dcollector-2": {"items": [pod("collector-2-x7k", ready=False)]},
         f"/api/v1{NS}/pods/collector-2-x7k/log?tailLines=50": collect_log,
         f"/api/v1{NS}/pods?labelSelector=app%3Dpostgres": {"items": [pod("postgres-0", ready=db_ready)]},
+        f"/apis/autoscaling/v2{NS}/horizontalpodautoscalers/web": {   # #11 웹 HPA (1 ~ 2)
+            "spec": {"minReplicas": 1, "maxReplicas": 2},
+            "status": {"currentReplicas": 2, "desiredReplicas": 2,
+                       "currentMetrics": [{"type": "Resource", "resource": {"name": "cpu", "current": {"averageUtilization": 85}}}]}},
     }
 
 
@@ -411,14 +415,20 @@ def test_traffic_surge_is_reported_without_action(tmp_path):
 
 class Prom:
     """가짜 운영 Prometheus. 값을 바꿔 가며 시간의 흐름을 흉내 낸다.
-    alert: 이 경보가 울리는 중이면 1, 풀렸으면 None · err: 화면 요청 5xx 비율 · p95: 초 · rps: 초당 요청(지금, 1시간 전)"""
+    alert: 이 경보가 울리는 중이면 1, 풀렸으면 None · err: 화면 요청 5xx 비율 · p95: 초 · rps: 초당 요청(지금, 1시간 전)
+    entrance: 입구(Traefik) 초당 요청(지금, 1시간 전, 거절된 것까지) · rejected: 입구 429 비율"""
 
-    def __init__(self, alert=1.0, err=0.0, p95=0.1, rps=(None, None)):
+    def __init__(self, alert=1.0, err=0.0, p95=0.1, rps=(None, None), entrance=(None, None), rejected=None):
         self.alert, self.err, self.p95, self.rps = alert, err, p95, rps
+        self.entrance, self.rejected = entrance, rejected
 
     def __call__(self, q):
         if q.startswith("ALERTS"):
             return self.alert
+        if "traefik" in q:
+            if 'code="429"' in q:
+                return self.rejected
+            return self.entrance[1] if "offset 1h" in q else self.entrance[0]
         if "histogram_quantile" in q:
             return self.p95
         if '5..' in q:
@@ -689,3 +699,35 @@ def test_an_unreachable_cluster_is_taped_as_failed_reads(tmp_path):
     assert replayed == diagnose("DataStale", fake_kube({}), Prom(), NOW)   # 실패 이유 문장까지 그대로
     with pytest.raises(LookupError):
         kube_("/api/v1/never-read")   # 녹화에 없는 읽기는 지어내지 않는다
+
+
+
+# --- 입구 경보 (#11): 요청 제한 거절(429) · 입구가 낸 502 · 503 ---
+
+def test_rejections_under_a_surge_are_reported_with_the_hpa_state(tmp_path):
+    # 요청 제한이 일하는 중: 웹 파드는 HPA가 이미 2/2까지 늘렸다 → 운영 AI가 할 조치가 없다, 사람에게 보고만
+    prom = Prom(entrance=(800.0, 0.1), rejected=0.6)
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster()), prom)
+    row = ops.alert("WebRequestsRejected")
+    assert (row["severity"], row["cause"], row["action"], row["state"]) == ("warning", "traffic_surge", None, "human")
+    saw = {e["look"]: e["saw"] for e in row["evidence"]}
+    assert saw["입구 요청량 (지금 / 1시간 전)"] == "800.00 / 0.10 req/s"   # 거절된 요청까지 센다 (웹 지표에는 안 보인다)
+    assert saw["입구 거절 비율 (429)"] == "60%"
+    assert saw["웹 HPA"] == "2/2 파드 (최소 1) · CPU 85%"
+    assert "조치: 없음" in ops.sent[-1] and "2/2 파드" in ops.sent[-1]
+
+
+def test_rejections_without_a_surge_are_not_explained(tmp_path):
+    # 요청이 늘지 않았는데 거절한다 (제한 값 잘못 등): 점검표가 아는 원인이 아니다 → 판단 못 함
+    row = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster()), Prom(entrance=(1.0, 1.0), rejected=0.02)).alert(
+        "WebRequestsRejected")
+    assert (row["cause"], row["action"]) == (None, None)
+
+
+def test_entrance_errors_use_the_web_checklist(tmp_path):
+    # 입구 502 · 503 = 웹이 응답하지 못한다. 원인 찾기는 웹 5xx와 같다: DB → 웹 파드 → 최근 배포
+    db = str(tmp_path / "opsai.db")
+    row = Ops(db, fake_kube(cluster(deployed="2026-10-21T13:50:00Z")), Prom()).alert("EntranceErrorsHigh")
+    assert (row["severity"], row["cause"], row["action"], row["tier"]) == ("critical", "recent_deploy", "rollback_web", "T1")
+    row = Ops(db, fake_kube(cluster(web_ready=False, web_waiting="CrashLoopBackOff")), Prom()).alert("EntranceErrorsHigh")
+    assert (row["cause"], row["action"]) == ("web_down", None)

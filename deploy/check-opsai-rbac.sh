@@ -11,12 +11,13 @@ check() {   # check <yes|no> <verb> <resource[/name]> <namespace> [kubectl 옵�
   got=$(kubectl --context "$ctx" auth can-i "$2" "$3" -n "$4" --as="$as" "${@:5}" 2>/dev/null)
   [ "$got" = "$1" ] && echo "ok   $1 $2 $3 -n $4 ${*:5}" || { echo "FAIL $2 $3 -n $4 ${*:5}: $got (기대 $1)"; bad=1; }
 }
-for r in pods pods/log deployments.apps replicasets.apps jobs.batch cronjobs.batch; do check yes get "$r" banjjak; check yes list "$r" banjjak; done
+for r in pods pods/log deployments.apps replicasets.apps jobs.batch cronjobs.batch horizontalpodautoscalers.autoscaling; do check yes get "$r" banjjak; check yes list "$r" banjjak; done
 check no get secrets banjjak
 check no delete pods banjjak
 check no create jobs.batch banjjak
 check no patch deployments.apps/postgres banjjak
 check no patch cronjobs.batch/backup banjjak
+check no patch horizontalpodautoscalers.autoscaling/web banjjak   # HPA는 읽기만 (#11)
 # 조치 표의 쓰기: execute 클러스터에서만 yes
 act=no; [ "$mode" = execute ] && act=yes
 check $act patch deployments.apps/web banjjak

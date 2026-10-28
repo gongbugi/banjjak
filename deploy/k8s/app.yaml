@@ -82,11 +82,30 @@ spec:
     - port: 80
       targetPort: 8000
 ---
-# 주소(도메인)는 미뤘다 → 호스트 없이 서버 IP로 받는다 (k3s 기본 Traefik)
+# 요청 제한 (#11): 2차 공급 측정 초당 400건 × 0.8. 넘으면 입구(Traefik)가 429로 거절한다 → 웹이 죽지 않는다
+# burst 320 (1초치): 기본값 1이면 몇 밀리초 안에 둘만 와도 거절될 수 있다
+# 출처 기준 = Host 헤더: Traefik에는 "전체 하나" 설정이 없다. 주소(도메인)가 없어 모든 요청의 Host가 같은 IP라 사실상 통 하나
+# ponytail: Host 헤더를 바꿔 보내면 다른 통으로 빠져나간다. 막으려면 주소를 정하고 다른 Host는 거절한다
+# Traefik이 하나라 메모리 안에서 센다 (여럿이면 Redis가 필요하다)
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ratelimit
+spec:
+  rateLimit:
+    average: 320
+    period: 1s
+    burst: 320
+    sourceCriterion:
+      requestHost: true
+---
+# 주소(도메인)는 미뤘다 → 호스트 없이 서버 IP로 받는다 (k3s 기본 Traefik). 화면 · 그 밖의 모든 주소는 요청 제한을 지난다
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: web
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: banjjak-ratelimit@kubernetescrd
 spec:
   rules:
     - http:
@@ -95,3 +114,17 @@ spec:
             pathType: Prefix
             backend:
               service: {name: web, port: {number: 80}}
+---
+# 확인용 주소는 요청 제한 밖 (Better Stack · 준비 검사). 급증 때 밖의 감시가 "다운"으로 알리면 장애 주입의 정답이 샌다
+# Traefik은 규칙이 긴 쪽을 먼저 본다 → 정확한 경로가 위 "/"보다 앞선다
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web-checks
+spec:
+  rules:
+    - http:
+        paths:
+          - {path: /healthz, pathType: Exact, backend: {service: {name: web, port: {number: 80}}}}
+          - {path: /readyz, pathType: Exact, backend: {service: {name: web, port: {number: 80}}}}
+          - {path: /freshness, pathType: Exact, backend: {service: {name: web, port: {number: 80}}}}
