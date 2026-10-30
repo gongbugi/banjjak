@@ -51,7 +51,11 @@ def handle(alert, prom, now, conn, hands, after=None):
               "severity": severity, **found, "checklist": found}
     checklist.sweep(kube, prom_, now)   # 이 점검표가 안 본 읽기까지 녹화 (#20 진단기를 같은 상태로 다시 돌린다)
     if hands.llm and not after and kind in KINDS:
-        record["llm"] = said = hands.llm(conn, alert, tape, now)
+        try:
+            said = hands.llm(conn, alert, tape, now)
+        except Exception as e:   # 클라이언트를 못 만들어도 진단은 점검표로 잇는다 (배경 작업이라 여기서 죽으면 기록도 Slack도 없다)
+            said = {"failed": f"{type(e).__name__}: {e}"[:200]}
+        record["llm"] = said
         if "failed" not in said:
             record.update(said)
         elif said.get("tell"):

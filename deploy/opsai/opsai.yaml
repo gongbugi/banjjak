@@ -13,7 +13,7 @@ spec:
   resources:
     requests: {storage: 1Gi}
 ---
-# 운영 AI: 울린 알림을 점검표로 진단하고(#7), 조치 표로 조치 · 등급을 정해 5분 뒤 실행하거나 사람에게 넘긴다(#8)
+# 운영 AI: 울린 알림을 LLM으로 진단하고(#20, 키가 없거나 실패하면 점검표 #7), 조치 표로 조치 · 등급을 정해 5분 뒤 실행하거나 사람에게 넘긴다(#8)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -57,6 +57,11 @@ spec:
               valueFrom: {secretKeyRef: {name: slack-socket, key: app_token, optional: true}}
             - name: SLACK_APPROVER         # 버튼을 누를 수 있는 사람 (Slack 멤버 ID). 없으면 아무도 못 누른다
               valueFrom: {secretKeyRef: {name: slack-socket, key: approver, optional: true}}
+            # LLM 진단 (#20). Secret은 운영 VM에만 둔다 (infra/azure/anthropic-key.ps1 · typesafe-key.ps1). 없으면(로컬) 점검표만 돈다
+            - name: ANTHROPIC_API_KEY
+              valueFrom: {secretKeyRef: {name: anthropic, key: api_key, optional: true}}
+            - name: TYPESAFE_API_KEY       # jev 조치 게이트. 없으면 표대로
+              valueFrom: {secretKeyRef: {name: typesafe, key: api_key, optional: true}}
           volumeMounts:
             - {name: app-cluster, mountPath: /etc/app-cluster, readOnly: true}
             - {name: data, mountPath: /data}

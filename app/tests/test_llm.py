@@ -287,6 +287,17 @@ def test_ledgers_are_separate(conn):
     assert llm.judge(conn, firing("DataStale"), tape_of(), NOW, Fake(answer("unknown")), ledger="replay")["failed"]
 
 
+def test_a_client_that_cannot_start_still_diagnoses_by_checklist(tmp_path):
+    def broken(conn, alert, tape, now):
+        raise ImportError("anthropic")
+    ops = ops_with(tmp_path, Fake(), fake_kube(cluster(suspend=True)))
+    ops.hands = ops.hands._replace(llm=broken)
+    result = ops.alert("DataStale")
+    assert (result["cause"], result["diagnoser"]) == ("collector_suspended", checklist.NAME)
+    assert "ImportError" in result["llm"]["failed"]
+    assert ops.states() == [("resume_collector", "T1", "waiting")]
+
+
 def test_cap_tells_slack_once_a_day(tmp_path):
     ops = ops_with(tmp_path, Fake())
     with closing(connect(ops.db)) as c:
