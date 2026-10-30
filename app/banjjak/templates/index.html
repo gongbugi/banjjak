@@ -3,75 +3,118 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>반짝 | 지금 뜨는 GitHub 레포</title>
+  <title>{% if field_name %}{{ field_name }} | {% endif %}반짝 | 지금 뜨는 GitHub 레포</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono&family=IBM+Plex+Sans+KR:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;600&display=swap" rel="stylesheet">
   <style>
     /* 별을 기록하는 관측 수첩: 옅은 푸른 종이에 남색 잉크, 반짝임만 금색 */
     :root {
-      --paper: #EDF0F5; --ink: #18213D; --muted: #586179; --rule: #CCD2DF; --code: #E1E6EF; --star: #E2A400;
+      --paper: #EDF0F5; --ink: #18213D; --muted: #586179; --rule: #CCD2DF; --edge: #7F8AA3; --card: #E2E7F0;
+      --star: #E2A400; --tag: #F6E6B4; --tag-ink: #5A4200;
       --sans: "IBM Plex Sans KR", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
     }
-    * { box-sizing: border-box; }
+    *, ::before { box-sizing: border-box; }
     body { margin: 0; background: var(--paper); color: var(--ink); font: 400 1rem/1.65 var(--sans); }
-    a { color: inherit; text-underline-offset: .2em; text-decoration-color: var(--rule); }
+    a { color: inherit; text-underline-offset: .2em; text-decoration-color: #9AA4BA; }
     a:hover { text-decoration-color: var(--ink); }
-    a:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 2px; }
-    main { max-width: 46rem; margin: 0 auto; padding: 3.5rem 1rem 4rem; }
+    a:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 4px; }
+    .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    main { max-width: 72rem; margin: 0 auto; padding: 3.5rem clamp(1rem, 4vw, 2.5rem) 4.5rem; }
+    h2 { margin: 0; font-size: 1.25rem; font-weight: 600; }
 
+    header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 1.25rem 3rem;
+             padding-bottom: 2rem; border-bottom: 1px solid var(--rule); }
     header h1 { margin: 0; font-size: clamp(2.6rem, 9vw, 4rem); line-height: 1; font-weight: 600; letter-spacing: -.02em;
-                display: flex; align-items: center; gap: .3em; }
+                display: flex; align-items: center; gap: .25em; }
     header h1 svg { width: .62em; height: .62em; fill: var(--star); }
-    .lede { margin: .6rem 0 0; font-size: 1.15rem; }
-    .basis { margin: 1.4rem 0 0; font-weight: 600; }
-    .note { margin: .2rem 0 0; color: var(--muted); max-width: 38rem; }
+    .lede { margin: .75rem 0 0; font-size: 1.2rem; }
+    .about { max-width: 30rem; }
+    .basis { margin: 0; font-weight: 600; }
+    .note { margin: .25rem 0 0; color: var(--muted); font-size: .94rem; }
 
-    .week { margin: 2.6rem 0 0; }
-    .week h2, .ranking h2 { font-size: 1rem; font-weight: 600; margin: 0 0 .7rem; }
-    .week ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .5rem 1.6rem; }
-    .week .n { font-weight: 600; font-variant-numeric: tabular-nums; margin-left: .35em; }
-    .week .prev { color: var(--muted); font-size: .85rem; margin-left: .4em; }
+    .columns { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 3rem 4rem; margin-top: 2.5rem; }
+    .ranking { flex: 999 1 35rem; min-width: 0; }
+    .week { flex: 1 1 18.75rem; min-width: 0; }
+    .title { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .25rem 1rem; }
+    .count { margin: 0; color: var(--muted); font-size: .875rem; }
 
-    .ranking { margin: 3rem 0 0; }
-    .ranking ol { list-style: none; margin: 0; padding: 0; }
-    .repo { display: grid; grid-template-columns: 2rem 2rem 1fr; column-gap: .4rem; padding: 1.3rem 0; }
+    /* 분야별 보기: 링크라 자바스크립트 없이 걸러진다 (?field=) */
+    .fields { margin-top: .9rem; display: flex; flex-wrap: wrap; gap: .5rem; }
+    .fields a { min-height: 44px; padding: 0 1rem; border: 1px solid var(--edge); border-radius: 999px; text-decoration: none;
+                display: inline-flex; align-items: center; gap: .5rem; font-size: .94rem; }
+    .fields a:hover { border-color: var(--ink); }
+    .fields .n { font: .8rem var(--mono); color: var(--muted); }
+    .fields a[aria-current] { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+    .fields a[aria-current] .n { color: #C9D0DF; }
+
+    .ranking ol { list-style: none; margin: 1.25rem 0 0; padding: 0; }
+    .repo { display: grid; grid-template-columns: 2rem 2.25rem 1fr; column-gap: .5rem; padding: 1.4rem 0; border-top: 1px solid var(--rule); }
     .repo > div { min-width: 0; }   /* 긴 설치 명령이 칸을 넓혀 화면 밖으로 밀지 않게: 코드 블록 안에서만 스크롤 */
-    .rank { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; padding-top: .05rem; }
+    .rank { color: var(--muted); font: .94rem/1.9 var(--mono); text-align: right; }
     .spark { display: flex; justify-content: center; padding-top: .3rem; }
-    .spark svg { fill: var(--star); width: calc(1.6rem * var(--glow)); height: calc(1.6rem * var(--glow));
+    .spark svg { fill: var(--star); width: calc(1.75rem * var(--glow)); height: calc(1.75rem * var(--glow));
                  animation: twinkle .9s ease-out both; animation-delay: var(--delay); }
     @keyframes twinkle {
       0% { opacity: 0; transform: scale(.2) rotate(-30deg); }
       60% { opacity: 1; transform: scale(1.18); }
       100% { transform: scale(1); }
     }
-    @media (prefers-reduced-motion: reduce) { .spark svg { animation: none; } }
 
     .head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .1rem 1rem; }
-    .name { font-size: 1.12rem; font-weight: 600; word-break: break-word; }
-    .gain { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .name { font-size: 1.12rem; font-weight: 600; overflow-wrap: anywhere; }
+    .gain { font-weight: 600; white-space: nowrap; }
+    .gain b { font: 500 1rem var(--mono); }
     .est { color: var(--muted); font-size: .85rem; font-weight: 400; }
-    .desc { margin: .25rem 0 0; }
-    .facts { margin: .35rem 0 0; color: var(--muted); font-size: .9rem; display: flex; flex-wrap: wrap; gap: 0 1.1rem; }
+    .desc { margin: .25rem 0 0; overflow-wrap: anywhere; }
+    .facts { margin: .5rem 0 0; color: var(--muted); font-size: .875rem; display: flex; flex-wrap: wrap; gap: .1rem 1rem; }
     .field { color: var(--ink); font-weight: 600; }
 
-    .card { margin: .8rem 0 0; display: grid; grid-template-columns: 5.2rem 1fr; gap: .55rem .6rem; font-size: .92rem; }
-    .card dt { color: var(--muted); padding-top: .1rem; }
+    /* 카드는 접어 두고 무엇이 들었는지만 한 줄로 */
+    summary { min-height: 44px; display: inline-flex; align-items: center; gap: .75rem; font-size: .875rem; cursor: pointer; list-style: none; }
+    summary::-webkit-details-marker { display: none; }
+    summary::before { content: ""; width: 7px; height: 7px; border: solid var(--ink); border-width: 0 1.8px 1.8px 0;
+                      transform: rotate(-45deg); transition: transform .15s; }
+    details[open] > summary::before { transform: rotate(45deg); }
+    .card { margin: .25rem 0 0; padding: 1rem 1.1rem; background: var(--card); border-radius: 8px;
+            display: grid; grid-template-columns: 5.25rem 1fr; gap: .9rem 1rem; font-size: .94rem; }
+    .card dt { color: var(--muted); }
     .card dd { margin: 0; min-width: 0; }
-    pre { margin: 0; padding: .55rem .7rem; background: var(--code); border-radius: 4px; overflow: auto; max-height: 9.5em;
-          font: .84rem/1.5 var(--mono); }
+    pre { margin: 0; padding: .6rem .75rem; background: var(--ink); color: var(--paper); border-radius: 6px; overflow: auto;
+          max-height: 10em; font: .82rem/1.6 var(--mono); }
     .missing { color: var(--muted); }
-    .quote { margin: 0 0 .4rem; padding-left: .7rem; border-left: 2px solid var(--star); overflow-wrap: anywhere; }
-    .quote span { display: block; color: var(--muted); font-size: .82rem; }
-    .related a { margin-right: .9rem; overflow-wrap: anywhere; }
+    .quote { margin: 0 0 .5rem; overflow-wrap: anywhere; }
+    .quote:last-child { margin-bottom: 0; }
+    .tag { display: inline-block; margin-right: .5rem; padding: 0 .5rem; border-radius: 4px; background: var(--tag);
+           color: var(--tag-ink); font-size: .8rem; font-weight: 600; }
+    .related { display: flex; flex-wrap: wrap; gap: .1rem 1rem; }
+    .empty { margin: 0; padding: 1.25rem 0; border-top: 1px solid var(--rule); color: var(--muted); }
 
-    footer { margin: 3rem 0 0; color: var(--muted); font-size: .88rem; max-width: 38rem; }
+    /* 이번 주 · 지난주 막대: 채움과 테두리로 나눈다 (색만으로 나누지 않게) */
+    .week .sum { margin: .4rem 0 0; color: var(--muted); font-size: .94rem; }
+    .week .sum b { color: var(--ink); font-family: var(--mono); }
+    .legend { margin: .75rem 0 0; display: flex; gap: 1rem; font-size: .8rem; color: var(--muted); }
+    .legend span::before { content: ""; display: inline-block; width: 16px; height: 8px; margin-right: 6px; border-radius: 2px; vertical-align: middle; }
+    .legend .this::before, .bars .this { background: var(--ink); }
+    .legend .last::before, .bars .last { border: 1.5px solid var(--muted); }
+    .week ul { list-style: none; margin: 1.25rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .9rem; }
+    .week .other { padding-top: .9rem; border-top: 1px solid var(--rule); }
+    .row { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; font-size: .94rem; }
+    .row b { font-family: var(--mono); }
+    .prev { color: var(--muted); font-size: .8rem; white-space: nowrap; }
+    .bars { margin-top: .4rem; display: flex; flex-direction: column; gap: 3px; }
+    .bars span { display: block; height: 8px; border-radius: 2px; width: var(--w); }
+
+    footer { margin: 3.5rem 0 0; padding-top: 1.5rem; border-top: 1px solid var(--rule); color: var(--muted); font-size: .875rem; max-width: 40rem; }
     @media (max-width: 520px) {
-      .repo { grid-template-columns: 1.6rem 1.6rem 1fr; }
+      /* 폰에서 분야 칩이 다섯 줄로 쌓여 순위를 밀어내지 않게 한 줄로 옆으로 민다 */
+      .fields { flex-wrap: nowrap; overflow-x: auto; padding-bottom: .25rem; }
+      .fields a { flex: none; }
+      .repo { grid-template-columns: 1.6rem 1.75rem 1fr; }
       .card { grid-template-columns: 1fr; gap: .2rem; }
-      .card dd { margin-bottom: .5rem; }
+      .card dd { margin-bottom: .6rem; }
     }
+    @media (prefers-reduced-motion: reduce) { .spark svg { animation: none; } summary::before { transition: none; } }
   </style>
 </head>
 <body>
@@ -80,65 +123,102 @@
 </svg>
 <main>
   <header>
-    <h1><svg aria-hidden="true"><use href="#spark"/></svg>반짝</h1>
-    <p class="lede">지금 별이 빨리 느는 GitHub 레포</p>
-    <p class="basis">{{ basis or "아직 수집 전이에요" }}</p>
-    <p class="note">최근 30일 안에 생긴 레포 중 별이 빨리 느는 순서예요. 오래된 레포가 갑자기 뜨는 경우는 아직 보지 않아요.</p>
+    <div>
+      <h1><svg aria-hidden="true"><use href="#spark"/></svg>반짝</h1>
+      <p class="lede">지금 별이 빨리 느는 GitHub 레포</p>
+    </div>
+    <div class="about">
+      <p class="basis">{{ basis or "아직 수집 전이에요" }}</p>
+      <p class="note">최근 30일 안에 생긴 레포 중 별이 빨리 느는 순서예요. 오래된 레포가 갑자기 뜨는 경우는 아직 보지 않아요.</p>
+    </div>
   </header>
 
-  <section class="week" aria-labelledby="week-title">
+  <div class="columns">
+  <section class="ranking" aria-labelledby="rank-title">
+    <div class="title">
+      <h2 id="rank-title">하루 별 증가 순위</h2>
+      <p class="count">{% if field_name %}{{ field_name }} {{ items | length }}개{% else %}레포 {{ total }}개{% endif %}</p>
+    </div>
+    {% if fields %}
+    <nav class="fields" aria-label="분야별 보기">
+      <a href="/"{% if not field %} aria-current="page"{% endif %}>전체<span class="n">{{ total }}</span></a>
+      {% for f in fields %}
+      <a href="/?field={{ f.slug }}"{% if f.slug == field %} aria-current="page"{% endif %}>{{ f.name }}<span class="n">{{ f.count }}</span></a>
+      {% endfor %}
+    </nav>
+    {% endif %}
+    <ol>
+    {# 50번 되풀이되는 칸이라 들여쓰기 없이 쓴다: 공백만으로 응답이 10KB 넘게 늘었다 (급증 때 송신량) #}
+    {% for r in items %}
+<li class="repo" style="--glow: {{ r.glow }}; --delay: {{ [loop.index0 * 40, 1200] | min }}ms">
+<span class="rank">{{ r.rank }}</span>
+<span class="spark" aria-hidden="true"><svg><use href="#spark"/></svg></span>
+<div>
+<div class="head">
+<a class="name" href="{{ r.url }}">{{ r.full_name }}</a>
+<span class="gain">하루 <b>+{{ "{:,.1f}".format(r.stars_per_day) }}</b>{% if r.estimated %} <span class="est">(첫 기록이라 생성 후 평균)</span>{% endif %}</span>
+</div>
+{% if r.description %}<p class="desc">{{ r.description }}</p>{% endif %}
+<p class="facts">
+{% if r.card %}<span class="field">{{ r.card.category_name }}</span>{% endif %}
+{% if r.language %}<span>{{ r.language }}</span>{% endif %}
+<span>별 {{ "{:,}".format(r.stars) }}개</span>
+</p>
+{% if r.card %}
+<details>
+<summary>{{ "설치 명령" if r.card.usage else "설치 방법 없음" }}{% if r.card.notes %} · 알아둘 점 {{ r.card.notes | length }}{% endif %}{% if r.related %} · 같은 분야 {{ r.related | length }}{% endif %}</summary>
+<dl class="card">
+<dt>설치</dt>
+<dd>{% if r.card.usage %}<pre><code>{{ r.card.usage }}</code></pre>{% else %}<span class="missing">README에 없음</span>{% endif %}</dd>
+{% if r.card.notes %}
+<dt>알아둘 점</dt>
+<dd>{% for n in r.card.notes %}<p class="quote"><span class="tag">{{ n.name }}</span>“{{ n.quote | plain }}”</p>{% endfor %}</dd>
+{% endif %}
+{% if r.related %}
+<dt>같은 분야</dt>
+<dd class="related">{% for name in r.related %}<a href="https://github.com/{{ name }}">{{ name }}</a>{% endfor %}</dd>
+{% endif %}
+</dl>
+</details>
+{% endif %}
+</div>
+</li>
+    {% else %}
+      {% if field %}
+      <li class="empty">지금 순위에 이 분야 레포가 없어요. <a href="/">전체 보기</a></li>
+      {% else %}
+      <li class="empty">아직 수집된 레포가 없어요. 수집기는 매시 정각에 돌아요.</li>
+      {% endif %}
+    {% endfor %}
+    </ol>
+  </section>
+
+  <aside class="week" aria-labelledby="week-title">
     <h2 id="week-title">이번 주 순위에 새로 든 레포</h2>
     {% set has_last = week | selectattr("last_week") | list | length > 0 %}
     {% if week %}
+    <p class="sum">이번 주 <b>{{ week | sum(attribute="this_week") }}</b>개{% if has_last %} · 지난주 {{ week | sum(attribute="last_week") }}개{% endif %}</p>
+    {% if has_last %}<p class="legend" aria-hidden="true"><span class="this">이번 주</span><span class="last">지난주</span></p>{% endif %}
     <ul>
       {% for w in week %}
-      <li>{{ w.name }}<span class="n">{{ w.this_week }}</span>{% if has_last %}<span class="prev">지난주 {{ w.last_week }}</span>{% endif %}</li>
+      {% set d = w.this_week - w.last_week %}
+      <li{% if w.slug == "unclassified" %} class="other"{% endif %}>
+        <div class="row">
+          <span>{{ w.name }}</span>
+          <span><b>{{ w.this_week }}</b>{% if has_last %} <span class="prev">지난주 {{ w.last_week }} · {% if d > 0 %}<span aria-hidden="true">▲</span><span class="sr">늘어 </span>{{ d }}{% elif d < 0 %}<span aria-hidden="true">▼</span><span class="sr">줄어 </span>{{ -d }}{% else %}같음{% endif %}</span>{% endif %}</span>
+        </div>
+        <div class="bars" aria-hidden="true">
+          <span class="this" style="--w: {{ w.this_pct }}%"></span>
+          {% if has_last %}<span{% if w.last_week %} class="last" style="--w: {{ w.last_pct }}%"{% endif %}></span>{% endif %}
+        </div>
+      </li>
       {% endfor %}
     </ul>
     {% else %}
     <p class="note">이번 주 분석이 아직 없어요. 분석기는 매시 20분에 돌아요.</p>
     {% endif %}
-  </section>
-
-  <section class="ranking" aria-labelledby="rank-title">
-    <h2 id="rank-title">하루 별 증가 순위</h2>
-    <ol>
-    {% for r in items %}
-      <li class="repo" style="--glow: {{ r.glow }}; --delay: {{ [loop.index0 * 40, 1200] | min }}ms">
-        <span class="rank">{{ r.rank }}</span>
-        <span class="spark" aria-hidden="true"><svg><use href="#spark"/></svg></span>
-        <div>
-          <div class="head">
-            <a class="name" href="{{ r.url }}">{{ r.full_name }}</a>
-            <span class="gain">하루 +{{ r.stars_per_day }}{% if r.estimated %} <span class="est">(첫 기록이라 생성 후 평균)</span>{% endif %}</span>
-          </div>
-          {% if r.description %}<p class="desc">{{ r.description }}</p>{% endif %}
-          <p class="facts">
-            {% if r.card %}<span class="field">{{ r.card.category_name }}</span>{% endif %}
-            {% if r.language %}<span>{{ r.language }}</span>{% endif %}
-            <span>별 {{ r.stars }}개</span>
-          </p>
-          {% if r.card %}
-          <dl class="card">
-            <dt>설치</dt>
-            <dd>{% if r.card.usage %}<pre><code>{{ r.card.usage }}</code></pre>{% else %}<span class="missing">README에 없음</span>{% endif %}</dd>
-            {% if r.card.notes %}
-            <dt>알아둘 점</dt>
-            <dd>{% for n in r.card.notes %}<p class="quote"><span>{{ n.name }}</span>{{ n.quote | plain }}</p>{% endfor %}</dd>
-            {% endif %}
-            {% if r.related %}
-            <dt>같은 분야</dt>
-            <dd class="related">{% for name in r.related %}<a href="https://github.com/{{ name }}">{{ name }}</a>{% endfor %}</dd>
-            {% endif %}
-          </dl>
-          {% endif %}
-        </div>
-      </li>
-    {% else %}
-      <li class="note">아직 수집된 레포가 없어요. 수집기는 매시 정각에 돌아요.</li>
-    {% endfor %}
-    </ol>
-  </section>
+  </aside>
+  </div>
 
   <footer>
     분야, 설치 방법, 알아둘 점은 AI 없이 README를 정해진 규칙으로 읽어 뽑았어요. 틀릴 수 있으니 원문도 확인해 주세요.

@@ -15,7 +15,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
 
-from banjjak import db
+from banjjak import db, main
 
 _HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -32,3 +32,4 @@ def _schema():
 def _clean():
     with db.engine().begin() as conn:
         conn.execute(text("TRUNCATE analyses, readmes, star_snapshots, repos"))
+    main._cache.clear()   # 앞 테스트의 화면이 남지 않게 (응답 캐시 60초)

@@ -66,6 +66,19 @@ def test_page_shows_card_and_missing_usage():
     assert "Cloud sync needs a paid plan." in html and "](https://x.dev" not in html
 
 
+def test_page_filters_by_field_and_ignores_unknown_ones():
+    _seed_and_analyze()
+    with db.engine().begin() as conn:
+        conn.execute(insert(db.analyses), [_analysis(3, NOW, "creative")])   # c/paint는 다른 분야
+    html = client.get("/?field=dev-tools").text
+    assert "a/rocket" in html and "b/drill" in html and "c/paint" not in html
+    assert '<a href="/?field=dev-tools" aria-current="page">' in html
+    everything = client.get("/?field=nope").text
+    assert "c/paint" in everything and '<a href="/" aria-current="page">' in everything   # 모르는 분야는 전체로
+    client.get("/?field=<script>")
+    assert sorted(main._cache) == ["index", "index:dev-tools"]   # 캐시 칸은 아는 분야만큼 (아무 주소로 늘지 않게)
+
+
 def _analysis(repo_id, at, category="dev-tools", ok=True):
     return {"repo_id": repo_id, "method": METHOD, "analyzed_at": at, "checked_at": at, "ok": ok,
             "category": category if ok else None, "readme_sha": f"s{repo_id}" if ok else None}

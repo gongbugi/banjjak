@@ -5,6 +5,7 @@ import random
 import re
 import threading
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from prometheus_client.core import GaugeMetricFamily
 from sqlalchemy import text
 
 from banjjak import db
+from banjjak.analyze import CATEGORY_NAMES
 from banjjak.cards import KST, attach_cards, success_ratio, weekly_tally
 from banjjak.probe import USER_AGENT as PROBE_AGENT
 from banjjak.trending import latest_capture, trending
@@ -24,6 +26,7 @@ from banjjak.trending import latest_capture, trending
 # 지표는 이 앱에 없다. banjjak.serve가 9100 포트로 따로 낸다 (공개 입구로 새지 않게)
 app = FastAPI(title="banjjak")
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+templates.env.trim_blocks = templates.env.lstrip_blocks = True   # {% %} 줄이 빈 줄 · 공백으로 남지 않게 (응답 크기)
 _MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 # README 인용은 원문 그대로 저장하고, 화면에서만 마크다운 링크 · 강조 · 코드 표시를 글자로 보인다
 templates.env.filters["plain"] = lambda s: _MD_LINK.sub(r"\1", s).replace("**", "").replace("`", "")
@@ -181,17 +184,29 @@ def api_trending():
 
 
 @app.get("/", dependencies=[Depends(_fault)])
-def index(request: Request):
-    return HTMLResponse(_cached("index", lambda: _index_body(request)))
+def index(request: Request, field: str | None = None):
+    # 분야는 정해진 목록에서만 받는다. 모르는 값은 전체로 → 캐시 칸도 아는 분야만큼만 생긴다
+    field = field if field in CATEGORY_NAMES else None
+    return HTMLResponse(_cached(f"index:{field}" if field else "index", lambda: _index_body(request, field)))
 
 
-def _index_body(request):
+def _index_body(request, field):
     updated_at, items, week = _snapshot()
     basis = datetime.fromisoformat(updated_at).astimezone(KST) if updated_at else None
     basis_text = f"{basis.year}년 {basis.month}월 {basis.day}일 {basis:%H:%M} 기준 (한국 시간)" if basis else None
-    # 반짝임 크기: 하루 별 증가를 1위 대비 제곱근으로 (작은 차이도 보이게)
+    # 반짝임 크기: 하루 별 증가를 1위 대비 제곱근으로 (작은 차이도 보이게). 분야로 걸러도 전체 1위 기준
     top = max((i["stars_per_day"] for i in items), default=0)
     for i in items:
         i["glow"] = round(0.35 + 0.65 * (i["stars_per_day"] / top) ** 0.5, 2) if top > 0 else 0.35
-    # 템플릿은 요청(주소 · 헤더)을 쓰지 않는다 → 누구에게나 같은 HTML이라 캐시해도 된다
-    return templates.TemplateResponse(request, "index.html", {"basis": basis_text, "items": items, "week": week}).body
+    counts = Counter(i["card"]["category"] for i in items if i["card"])
+    fields = [{"slug": s, "name": CATEGORY_NAMES[s], "count": n}   # 많은 순, 미분류는 분야가 아니라 맨 뒤
+              for s, n in sorted(counts.items(), key=lambda c: (c[0] == "unclassified", -c[1], CATEGORY_NAMES[c[0]]))]
+    shown = [i for i in items if field is None or (i["card"] and i["card"]["category"] == field)]
+    # 주간 막대: 이번 주 · 지난주 통틀어 가장 큰 수가 100%
+    peak = max((max(w["this_week"], w["last_week"]) for w in week), default=0) or 1
+    for w in week:
+        w["this_pct"], w["last_pct"] = round(100 * w["this_week"] / peak, 1), round(100 * w["last_week"] / peak, 1)
+    # 템플릿은 요청(주소 · 헤더)을 쓰지 않는다. 분야는 캐시 키에 든다 → 같은 키면 누구에게나 같은 HTML
+    return templates.TemplateResponse(request, "index.html", {
+        "basis": basis_text, "items": shown, "total": len(items), "fields": fields,
+        "field": field, "field_name": CATEGORY_NAMES.get(field), "week": week}).body

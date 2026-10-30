@@ -14,11 +14,6 @@ from banjjak.probe import USER_AGENT as PROBE_AGENT
 client = TestClient(app)
 
 
-@pytest.fixture(autouse=True)
-def _empty_cache():
-    main._cache.clear()   # 앞 테스트의 화면이 남지 않게
-
-
 def test_healthz():
     assert client.get("/healthz").json() == {"status": "ok"}
 
