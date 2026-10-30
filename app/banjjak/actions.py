@@ -57,7 +57,10 @@ CREATE TABLE IF NOT EXISTS checks (
     record_id INTEGER PRIMARY KEY, until REAL NOT NULL, next REAL NOT NULL, count INTEGER NOT NULL DEFAULT 0,
     before_err REAL, before_p95 REAL, state TEXT NOT NULL, decided REAL, result TEXT);
 CREATE TABLE IF NOT EXISTS snapshots (
-    record_id INTEGER PRIMARY KEY, taken REAL NOT NULL, tape TEXT NOT NULL)"""
+    record_id INTEGER PRIMARY KEY, taken REAL NOT NULL, tape TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id INTEGER PRIMARY KEY, at REAL NOT NULL, ledger TEXT NOT NULL, kind TEXT NOT NULL, note TEXT, model TEXT,
+    input INTEGER, cache_write INTEGER, cache_read INTEGER, output INTEGER, cost REAL NOT NULL DEFAULT 0)"""
 
 
 class Hands(NamedTuple):
@@ -69,6 +72,8 @@ class Hands(NamedTuple):
     cluster: str
     buttons: bool = False   # Slack 버튼 클릭이 여기로 오나 (Socket Mode 앱 토큰이 있는 한 곳만)
     prom: Callable = None   # query -> float | None (확인 · 악화 판정)
+    llm: Callable = None    # (conn, alert, tape, now) -> 진단 | {"failed": 이유}. 없으면 점검표만 (키가 없는 곳)
+    gate: Callable = None   # (conn, record, action, now) -> {"p", "say"}. 없으면 표대로
 
 
 def connect(path):
@@ -78,9 +83,10 @@ def connect(path):
     return conn
 
 
-def plan(conn, record, now, tried=None):
+def plan(conn, record, now, tried=None, gate=None):
     """진단 기록 1건 → 조치 · 등급을 정해 저장하고 그 행을 돌려준다.
-    tried: 재진단이면 안 먹힌 앞선 조치. 같은 조치를 또 고르면 다시 하지 않고 사람에게."""
+    tried: 재진단이면 안 먹힌 앞선 조치. 같은 조치를 또 고르면 다시 하지 않고 사람에게.
+    조치는 표가 고른다. LLM(ask_human)과 jev(gate)는 등급을 올리기만 한다."""
     action = PLAN.get(record["cause"])
     tier, state, due, note = None, "human", None, None
     if tried and action == tried:
@@ -91,6 +97,14 @@ def plan(conn, record, now, tried=None):
                               (action, (now - HOUR).timestamp())).fetchone()[0]
         if before >= 2 and tier == "T1":
             tier, note = "T2", f"1시간에 {before + 1}번째 → T2로 올림"
+        if tier == "T1" and record.get("ask_human"):
+            tier, note = "T2", "LLM이 승인을 요청 → T2로 올림"
+        if tier == "T1" and gate:
+            record["gate"] = said = gate(conn, record, action, now)
+            if said["say"] == "approve":
+                tier, note = "T2", f"jev {said['p']:.2f} → T2로 올림"
+            elif said["say"] == "hold":
+                action, tier, state, note = None, None, "human", f"jev {said['p']:.2f} → 사람에게"
         if tier == "T1":
             due = (now + WAIT).timestamp()
     cur = conn.execute(

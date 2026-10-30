@@ -14,9 +14,10 @@ import urllib.request
 from contextlib import asynccontextmanager, closing
 from datetime import datetime, timezone
 
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from banjjak import actions, appcluster, checklist
+from banjjak import actions, appcluster, checklist, llm
 from banjjak.heartbeat import ping
 
 BEAT_EVERY = 60   # 초. Better Stack에는 더 긴 간격으로 걸어 한두 번 빠져도 버틴다
@@ -36,16 +37,25 @@ KINDS = {
 
 
 def handle(alert, prom, now, conn, hands, after=None):
-    """울린 알림 1건: 분류(코드) → 진단(점검표) → 조치 · 등급(표) → 기록 → Slack 보고. 실행은 tick이 5분 뒤에 한다.
+    """울린 알림 1건: 분류(코드) → 진단(점검표 · LLM) → 조치 · 등급(표) → 기록 → Slack 보고. 실행은 tick이 5분 뒤에 한다.
     hands.cluster: 이 운영 AI가 지키는 곳 (azure · local-k3d). 둘이 같은 Slack 채널에 보내므로 보고마다 밝힌다.
-    after: 재진단이면 (안 먹힌 앞선 기록, 이유). "안 먹혔다"를 첫 증거로 남기고, 같은 조치를 또 고르면 사람에게."""
+    after: 재진단이면 (안 먹힌 앞선 기록, 이유). "안 먹혔다"를 첫 증거로 남기고, 같은 조치를 또 고르면 사람에게.
+    LLM이 있으면 그 판단으로 조치하고, 실패하면 점검표 판단으로 간다. 두 판단은 늘 함께 남긴다 (#12 채점).
+    ponytail: 재진단은 점검표만 본다 (경보 하나에 LLM 1번). LLM이 다른 원인을 찾을 기회는 없고 같은 조치면 사람에게 간다."""
     kind = alert.get("labels", {}).get("alertname")
     sli, severity = KINDS.get(kind, (None, "unknown"))
     tape, kube, prom_ = checklist.recorder(hands.kube, prom)
+    found = checklist.diagnose(kind, kube, prom_, now)
     record = {"event": "diagnosis", "cluster": hands.cluster, "at": now.isoformat(), "alertname": kind,
               "startsAt": alert.get("startsAt"), "fingerprint": alert.get("fingerprint"), "sli": sli,
-              "severity": severity, **checklist.diagnose(kind, kube, prom_, now)}
+              "severity": severity, **found, "checklist": found}
     checklist.sweep(kube, prom_, now)   # 이 점검표가 안 본 읽기까지 녹화 (#20 진단기를 같은 상태로 다시 돌린다)
+    if hands.llm and not after and kind in KINDS:
+        record["llm"] = said = hands.llm(conn, alert, tape, now)
+        if "failed" not in said:
+            record.update(said)
+        elif said.get("tell"):
+            hands.slack(f"💸 LLM 상한 [{hands.cluster}] · {said['failed']} → 점검표로 진단한다")
     if after:
         before, reason = after
         record["after"] = before["id"]
@@ -53,7 +63,7 @@ def handle(alert, prom, now, conn, hands, after=None):
                                       "saw": f"기록 #{before['id']} {actions.ACTIONS[before['action']][1]} · {reason}"})
     print(json.dumps(record, ensure_ascii=False), flush=True)
     # 판단 기록도 이 행(diagnosis 칸)에 남는다 → #12 채점이 읽는다
-    row = actions.plan(conn, record, now, tried=after[0]["action"] if after else None)
+    row = actions.plan(conn, record, now, tried=after[0]["action"] if after else None, gate=hands.gate)
     conn.execute("INSERT INTO snapshots (record_id, taken, tape) VALUES (?, ?, ?)",
                  (row["id"], now.timestamp(), json.dumps(tape, ensure_ascii=False)))
     conn.commit()
@@ -116,7 +126,10 @@ def on_click(payload, now, conn, hands, approver, respond):
 
 def report(r, row, hands):
     lines = [f"🩺 운영 AI 진단 [{r['cluster']}] · {r['alertname']} ({r['sli'] or 'SLI 모름'} · {r['severity']})",
-             f"판단: {r['verdict'] or '판단 못 함 → 사람이 봐 주세요'}", "본 것:"]
+             f"판단: {r['verdict'] or '판단 못 함 → 사람이 봐 주세요'}"]
+    if "llm" in r:   # LLM이 못 본 이유는 기록에만 둔다 (금지어에 걸린 건을 구별할 수 없게 문구가 하나다)
+        lines.append("LLM 판단 없음 (점검표로)" if "failed" in r["llm"] else f"점검표: {r['checklist']['verdict'] or '판단 못 함'}")
+    lines.append("본 것:")
     lines += [f"• {e['look']}: {e['saw']}" for e in r["evidence"]]
     lines.append(actions.describe(row, hands.mode, hands.buttons))
     return "\n".join(lines)
@@ -185,7 +198,13 @@ def _buttons():
 def _hands():
     # 실행 여부는 클러스터마다 (ConfigMap ops-ai-env). 값이 없으면 안전한 쪽(dry-run)
     return actions.Hands(_kube, _patch, _slack, os.environ.get("ACTIONS", "dry-run"),
-                         os.environ.get("CLUSTER_NAME", "unknown"), bool(os.environ.get("SLACK_APP_TOKEN")), _prom)
+                         os.environ.get("CLUSTER_NAME", "unknown"), bool(os.environ.get("SLACK_APP_TOKEN")), _prom,
+                         _llm if os.environ.get("ANTHROPIC_API_KEY") else None,   # Secret anthropic. 없으면 점검표만
+                         llm.gate if os.environ.get("TYPESAFE_API_KEY") else None)   # Secret typesafe. 없으면 표대로
+
+
+def _llm(conn, alert, tape, now):
+    return llm.judge(conn, alert, tape, now, llm.client())
 
 
 def _db():
@@ -242,6 +261,11 @@ app = FastAPI(title="banjjak-ops-ai", lifespan=lifespan)
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
+
+
+@app.get("/metrics")
+def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/alerts")

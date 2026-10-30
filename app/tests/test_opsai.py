@@ -58,14 +58,16 @@ def rs(revision, image):
 
 def cluster(*, suspend=False, collect_ok=True, collect_log="", last_success="2026-10-21T11:00:20Z", db_ready=True,
             deployed="2026-10-20T09:00:00Z", web_ready=True, web_waiting=None, analyze_ok=True,
-            change_cause=None):
+            change_cause=None, env=()):
     """앱 클러스터 하나: 웹 · 수집기 · DB (k8s API가 실제로 돌려주는 모양에서 쓰는 칸만)."""
     return {
         f"/apis/apps/v1{NS}/deployments/web": {
             "metadata": {"annotations": {
                 "kubernetes.io/change-cause": change_cause or "deploy a169f9e04c1b at " + deployed,
                 "deployment.kubernetes.io/revision": "5"}},
-            "status": {"conditions": [
+            "spec": {"template": {"spec": {"containers": [
+                {"name": "web", "image": "ghcr.io/gongbugi/banjjak:a169f9e04c1b", "env": list(env)}]}}},
+            "status": {"readyReplicas": 1, "replicas": 1, "conditions": [
                 {"type": "Available", "status": "True", "lastUpdateTime": "2026-10-21T13:59:00Z"},
                 {"type": "Progressing", "status": "True", "reason": "NewReplicaSetAvailable", "lastUpdateTime": deployed},
             ]}},
