@@ -13,6 +13,7 @@ import os
 import random
 import sqlite3
 import sys
+import urllib.request
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from typing import Callable, NamedTuple
@@ -25,8 +26,9 @@ from banjjak.checklist import NS, _t
 CHANCE = float(os.environ.get("CHAOS_CHANCE", 5 / (7 * 24 * 6)))
 MIN_GAP = timedelta(hours=float(os.environ.get("CHAOS_GAP_HOURS", 12)))
 AFTER_DEPLOY = timedelta(minutes=30)
-WEIGHTS = {                         # 종류 → 가중치. 조치해야 풀리는 둘(나쁜 배포 · 수집 멈춤)이 40%
-    "web_pod_kill": 1, "db_pod_kill": 1, "latency": 2, "errors": 2, "bad_deploy": 2, "collector_suspend": 2}
+WEIGHTS = {                         # 종류 → 가중치. 조치해야 풀리는 둘(나쁜 배포 · 수집 멈춤)이 1/3
+    "web_pod_kill": 1, "db_pod_kill": 1, "latency": 2, "errors": 2, "bad_deploy": 2, "collector_suspend": 2,
+    "surge": 2}                     # 급증(#11)은 맨 끝: 부하 토큰이 없으면 빼고 고른다
 NEEDS_ACTION = {"bad_deploy": timedelta(hours=2), "collector_suspend": timedelta(hours=6)}   # 이 기한이 지나면 되돌림
 
 FAULT_CM = f"/api/v1{NS}/configmaps/web-fault"
@@ -35,6 +37,8 @@ COLLECTOR = f"/apis/batch/v1{NS}/cronjobs/collector"
 MERGE = "application/merge-patch+json"
 JSON_PATCH = "application/json-patch+json"
 CHANGE_CAUSE = "/metadata/annotations/kubernetes.io~1change-cause"
+# 급증 부하는 VM 밖 GitHub Actions 러너가 넣는다. 비공개 레포: 실행 기록(언제 부하를 넣었나)이 정답이라 공개 Actions에 안 남긴다
+LOAD = "/repos/gongbugi/banjjak-load/actions"
 
 SCHEMA = """CREATE TABLE IF NOT EXISTS injections (
     id INTEGER PRIMARY KEY, kind TEXT NOT NULL, manual INTEGER NOT NULL, params TEXT NOT NULL,
@@ -43,10 +47,11 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS injections (
 
 
 class App(NamedTuple):
-    """앱 클러스터: 읽기 · 쓰기 · 지우기 (계정 chaos/chaos, 주입에 필요한 것만)."""
+    """앱 클러스터: 읽기 · 쓰기 · 지우기 (계정 chaos/chaos, 주입에 필요한 것만) + 부하 워크플로 (없으면 None)."""
     kube: Callable
     patch: Callable
     delete: Callable
+    github: Callable | None = None
 
 
 def connect(path):
@@ -74,7 +79,7 @@ def run_once(conn, now, app, dice, switch):
         return "recent deploy"
     if dice.random() >= CHANCE:
         return "dice"
-    kind = _pick(dice)
+    kind = _pick(dice, {k: w for k, w in WEIGHTS.items() if k != "surge" or app.github})
     inject(conn, kind, now, app, dice)
     return f"injected {kind}"
 
@@ -88,9 +93,9 @@ def inject(conn, kind, now, app, dice, manual=False):
     return dict(conn.execute("SELECT * FROM injections ORDER BY id DESC LIMIT 1").fetchone())
 
 
-def _pick(dice):
-    roll, total = dice.random() * sum(WEIGHTS.values()), 0
-    for kind, weight in WEIGHTS.items():
+def _pick(dice, weights):
+    roll, total = dice.random() * sum(weights.values()), 0
+    for kind, weight in weights.items():
         total += weight
         if roll < total:
             return kind
@@ -193,12 +198,39 @@ def _resumed(app):
     return None if app.kube(COLLECTOR)["spec"].get("suspend") else "collector resumed"
 
 
+def _surge(app, now, dice):
+    """사용자 급증 (#11 측정 조건): 초당 800건 15분 = 2차 공급 400 × 2. 요청 제한 320을 넘겨 약 60%가 429."""
+    app.github("POST", f"{LOAD}/workflows/load.yml/dispatches",
+               {"ref": "main", "inputs": {"ref": "main", "rates": "800", "seconds": "900"}})
+    return {"rate": 800, "seconds": 900}, now + timedelta(minutes=30)   # 러너 준비 + 15분 + 여유. 저절로 끝난다
+
+
+def _stop_load(app, now, params):
+    # 끝낼 때 아직 도는 실행이 있으면 멈춘다 (러너가 늦게 떴거나 스위치를 껐을 때)
+    for run in app.github("GET", f"{LOAD}/workflows/load.yml/runs?per_page=5")["workflow_runs"]:
+        if run["status"] != "completed":
+            app.github("POST", f"{LOAD}/runs/{run['id']}/cancel")
+
+
+def _github(token):
+    """GitHub API (토큰은 비공개 레포 banjjak-load의 Actions 읽기 · 쓰기만)."""
+    def call(method, path, body=None):
+        req = urllib.request.Request("https://api.github.com" + path, method=method,
+                                     data=None if method == "GET" else json.dumps(body or {}).encode(),
+                                     headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            raw = r.read()
+        return json.loads(raw) if raw else None
+    return call
+
+
 INJECT = {"web_pod_kill": _kill_newest("web"), "db_pod_kill": _kill_newest("postgres"),
           "latency": _switch("delay", 1.0, 2.0), "errors": _switch("error_rate", 0.2, 0.5),
-          "bad_deploy": _bad_deploy, "collector_suspend": _suspend}
+          "bad_deploy": _bad_deploy, "collector_suspend": _suspend, "surge": _surge}
 REVERT = {"web_pod_kill": lambda *a: None, "db_pod_kill": lambda *a: None, "latency": _clear_switch,
           "errors": _clear_switch, "bad_deploy": _revert_bad_deploy,
-          "collector_suspend": lambda app, now, params: app.patch(COLLECTOR, {"spec": {"suspend": False}}, MERGE)}
+          "collector_suspend": lambda app, now, params: app.patch(COLLECTOR, {"spec": {"suspend": False}}, MERGE),
+          "surge": _stop_load}
 FIXED = {"bad_deploy": _bad_deploy_fixed, "collector_suspend": _resumed}
 
 
@@ -206,7 +238,8 @@ def main(argv):
     import os
     from banjjak import appcluster
     from banjjak.heartbeat import ping
-    app = App(appcluster.get, appcluster.patch, appcluster.delete)
+    token = os.environ.get("LOAD_TOKEN")
+    app = App(appcluster.get, appcluster.patch, appcluster.delete, _github(token) if token else None)
     now = datetime.now(timezone.utc)
     try:
         with open("/etc/chaos-switch/state") as f:   # ConfigMap chaos/switch. 없으면 off
@@ -221,8 +254,8 @@ def main(argv):
                 print(dict(r))
         else:
             # 설정도 남긴다: 고빈도 구간이 언제부터 언제까지였는지 로그로도 가린다
-            print(f"switch={switch} · {run_once(conn, now, app, random, switch)} · gap={MIN_GAP} · chance={CHANCE:.4f}",
-                  flush=True)
+            print(f"switch={switch} · {run_once(conn, now, app, random, switch)} · gap={MIN_GAP} · chance={CHANCE:.4f}"
+                  f" · surge={'on' if token else 'off'}", flush=True)
     ping(os.environ.get("HEARTBEAT_URL"))   # 한 바퀴를 마쳤다
 
 

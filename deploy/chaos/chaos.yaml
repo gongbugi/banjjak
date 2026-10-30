@@ -51,6 +51,8 @@ spec:
                 - {name: CHAOS_DB, value: /data/chaos.db}
                 - name: HEARTBEAT_URL          # 밖(Better Stack)에 "한 바퀴 돌았다". 없으면 안 보낸다
                   valueFrom: {secretKeyRef: {name: heartbeats, key: chaos, optional: true}}
+                - name: LOAD_TOKEN             # 급증(#11): 비공개 레포 banjjak-load의 Actions만 (chaos-secrets.ps1 -Load). 없으면 급증을 안 고른다
+                  valueFrom: {secretKeyRef: {name: load-token, key: token, optional: true}}
               volumeMounts:
                 - {name: app-cluster, mountPath: /etc/app-cluster, readOnly: true}
                 - {name: switch, mountPath: /etc/chaos-switch, readOnly: true}

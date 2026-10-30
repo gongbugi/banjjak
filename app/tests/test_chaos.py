@@ -10,6 +10,7 @@ NS = "/namespaces/banjjak"
 FAULT_CM = f"/api/v1{NS}/configmaps/web-fault"
 WEB = f"/apis/apps/v1{NS}/deployments/web"
 COLLECTOR = f"/apis/batch/v1{NS}/cronjobs/collector"
+LOAD = "/repos/gongbugi/banjjak-load/actions"
 
 
 class Dice:
@@ -26,9 +27,10 @@ def pod(name, created):
 
 
 class Cluster:
-    """가짜 앱 클러스터: 상태를 들고 있고, 쓰기 요청은 calls에 쌓인다 (상태는 시험이 직접 바꾼다)."""
-    def __init__(self, deployed="2026-10-23T20:00:00Z"):
+    """가짜 앱 클러스터 + 가짜 GitHub: 상태를 들고 있고, 쓰기 요청은 calls에 쌓인다 (상태는 시험이 직접 바꾼다)."""
+    def __init__(self, deployed="2026-10-23T20:00:00Z", load=True):
         self.calls = []
+        self.runs = []   # 비공개 레포 load 워크플로 실행 목록 (GitHub가 돌려줄 것)
         self.state = {
             f"/api/v1{NS}/pods?labelSelector=app%3Dweb": {"items": [
                 pod("web-old", "2026-10-23T10:00:00Z"), pod("web-new", "2026-10-23T20:00:00Z")]},
@@ -40,10 +42,14 @@ class Cluster:
             COLLECTOR: {"spec": {"suspend": False}},
         }
         self.app = App(self.kube, lambda path, body, ctype: self.calls.append(("patch", path, body)),
-                       lambda path: self.calls.append(("delete", path)))
+                       lambda path: self.calls.append(("delete", path)), self.github if load else None)
 
     def kube(self, path):
         return self.state[path]
+
+    def github(self, method, path, body=None):
+        self.calls.append(("github", method, path, body))
+        return {"workflow_runs": self.runs} if method == "GET" else None
 
 
 class Chaos:
@@ -158,6 +164,35 @@ def test_pod_kill_deletes_the_newest_web_pod(tmp_path):
     chaos = Chaos(tmp_path)
     chaos.inject("web_pod_kill")
     assert chaos.cluster.calls == [("delete", f"/api/v1{NS}/pods/web-new")]
+
+
+def test_surge_asks_the_private_load_workflow_to_push_from_outside_the_vm(tmp_path):
+    # 같은 VM 안 부하는 측정을 오염시킨다 (10-20 결정) → GitHub Actions 러너가 초당 800건 15분 (#11 측정 조건)
+    chaos = Chaos(tmp_path)
+    answer = chaos.inject("surge")
+    assert chaos.cluster.calls == [("github", "POST", f"{LOAD}/workflows/load.yml/dispatches",
+                                    {"ref": "main", "inputs": {"ref": "main", "rates": "800", "seconds": "900"}})]
+    assert json.loads(answer["params"]) == {"rate": 800, "seconds": 900}
+    assert answer["until"] - answer["started"] == 30 * 60   # 러너 준비 + 15분 + 여유
+
+
+def test_surge_ends_on_its_own_and_stops_a_run_still_going(tmp_path):
+    chaos = Chaos(tmp_path)
+    chaos.inject("surge")
+    assert chaos.run(NOW + timedelta(minutes=20)) == "active surge"
+    chaos.cluster.runs = [{"id": 7, "status": "in_progress"}, {"id": 6, "status": "completed"}]
+    assert chaos.run(NOW + timedelta(minutes=30)) == "ended surge"
+    assert chaos.cluster.calls[-2:] == [("github", "GET", f"{LOAD}/workflows/load.yml/runs?per_page=5", None),
+                                        ("github", "POST", f"{LOAD}/runs/7/cancel", None)]
+    assert chaos.answers()[0]["ended_by"] == "time"
+
+
+def test_surge_is_never_picked_without_the_load_token(tmp_path):
+    # 토큰이 없으면 (로컬 k3d · Secret 넣기 전) 급증을 고르지 않는다. 골라서 실패하면 10분마다 같은 실패가 쌓인다
+    roll = 0.99   # 가중치 맨 끝 = 급증
+    (tmp_path / "with").mkdir(), (tmp_path / "without").mkdir()
+    assert Chaos(tmp_path / "with").run(NOW, Dice(HIT, roll)) == "injected surge"
+    assert Chaos(tmp_path / "without", Cluster(load=False)).run(NOW, Dice(HIT, roll)) == "injected collector_suspend"
 
 
 def test_turning_the_switch_off_ends_what_is_running(tmp_path):
