@@ -18,8 +18,8 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065   # v5
         with: {python-version: "3.13"}
       - run: pip install -c requirements.lock -e ".[dev]"
       - run: pytest -q
@@ -30,7 +30,7 @@ jobs:
   rules:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
       # 경보 규칙을 가짜 시계열로 시험하고, 두 Prometheus 설정의 문법을 본다 (운영과 같은 버전의 promtool)
       - run: |
           promtool() { docker run --rm -v "$PWD/deploy:/d" -w /d --entrypoint promtool prom/prometheus:v3.13.4 "$@"; }
@@ -60,15 +60,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {contents: read, packages: write}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
       # 서버는 Azure x86(B2als v2) → amd64만 만든다
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f   # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9   # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8   # v6
         with:
           context: app
           platforms: linux/amd64

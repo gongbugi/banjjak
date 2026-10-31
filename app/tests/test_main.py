@@ -195,3 +195,10 @@ def test_fault_switch_still_breaks_cached_pages(monkeypatch, tmp_path):
     monkeypatch.setenv("FAULT", '{"error_rate": 1.0}')
     assert client.get("/").status_code == 500
     assert client.get("/api/trending").status_code == 500
+
+
+def test_unknown_methods_share_one_metric_label():
+    # 요청이 고른 글자가 그대로 라벨이 되면 지표 메모리가 끝없이 는다
+    client.request("BREW", "/")
+    body = generate_latest(REGISTRY).decode()
+    assert 'method="BREW"' not in body and 'method="OTHER"' in body

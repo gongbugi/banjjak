@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -168,3 +169,19 @@ def test_only_ranked_repos_are_analyzed():
     with db.engine().begin() as conn:
         assert analyze_once(fake_fetch({}), conn, NOW) == (0, 0)    # 순위가 비면 할 일이 없다
         assert conn.execute(select(func.count()).select_from(db.analyses)).scalar() == 0
+
+
+def test_nul_in_a_readme_does_not_undo_the_run():
+    # Postgres text는 NUL을 못 담는다. 삽입이 터지면 이번 실행의 분석이 전부 되돌려진다
+    repo = {"id": 9, "full_name": "x/nul", "html_url": "https://github.com/x/nul", "description": None, "language": None,
+            "stargazers_count": 200, "created_at": "2026-10-01T00:00:00Z"}
+    with db.engine().begin() as conn:
+        collect_once(lambda q, p: {"items": [repo] if p == 1 else []}, conn, NOW)
+        assert analyze_once(lambda name: {"sha": "a", "content": "# x\x00y\n"}, conn, NOW) == (1, 0)
+
+
+def test_a_long_line_does_not_stall_the_heading_parser():
+    start = time.perf_counter()
+    assert extract_usage("# a" + " " * 20000 + "b\n") is None
+    assert time.perf_counter() - start < 1
+    assert extract_usage("## Install ##\n```\npip install x\n```\n") == "pip install x"   # 끝의 #은 그대로 지운다

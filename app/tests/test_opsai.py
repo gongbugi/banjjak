@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
@@ -111,6 +112,7 @@ class Ops:
     def _slack(self, message):   # 글만 보내거나, 버튼이 있으면 {"text", "blocks"}
         self.messages.append(message)
         self.sent.append(message["text"] if isinstance(message, dict) else message)
+        return True
 
     def click(self, record_id, action, at, user=APPROVER, cluster="azure"):
         payload = {"type": "block_actions", "user": {"id": user},
@@ -914,3 +916,33 @@ def test_one_post_diagnoses_a_bounded_number_of_alerts(monkeypatch):
     monkeypatch.setattr("banjjak.opsai._handle", lambda alert, now: seen.append(alert))
     client.post("/alerts", json={"alerts": [firing("DataStale")] * 50})
     assert len(seen) == 20
+
+
+def test_t1_needs_a_report_that_really_went_out(tmp_path):
+    # 웹훅 Secret이 없으면 보낼 곳이 없다 (None). 아무도 못 봤으니 5분 뒤 혼자 실행하면 안 된다
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), Prom())
+    ops.hands = ops.hands._replace(slack=lambda message: None)
+    assert ops.alert("DataStale")["tier"] == "T2"
+
+
+def test_five_minutes_count_from_the_report(tmp_path):
+    def slow(message):
+        time.sleep(1.05)
+        return True
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), Prom())
+    ops.hands = ops.hands._replace(slack=slow)
+    ops.alert("DataStale")
+    with closing(connect(ops.db)) as conn:
+        due = conn.execute("SELECT due FROM records").fetchone()["due"]
+    assert due >= (NOW + timedelta(minutes=5)).timestamp() + 1
+
+
+def test_rejecting_one_t1_stops_its_sibling(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), Prom())
+    first = ops.alert("DataStale", starts="a")
+    second = ops.alert("DataStale", at=NOW + timedelta(minutes=1), starts="b")
+    assert second["tier"] == "T1"
+    ops.decide(first["id"], approve=False, at=NOW + timedelta(minutes=2))
+    ops.tick(NOW + timedelta(minutes=7))
+    assert ops.patched == []
+    assert "거부한 조치" in ops.sent[-1]

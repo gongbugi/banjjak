@@ -103,7 +103,7 @@ def categorize(full_name, description, topics):
     return "unclassified"
 
 
-_HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
+_HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.*)$")   # 끝의 #은 코드로 지운다: 정규식으로 지우면 긴 줄에서 n³이다
 _HTML_HEADING = re.compile(r"^\s*<h([1-6])[^>]*>(.*?)</h\1>", re.I)
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _USAGE_HEADING = re.compile(
@@ -129,7 +129,7 @@ def _lines(readme):
             yield line, "open", None
             continue
         h = _HEADING.match(line) or _HTML_HEADING.match(line)
-        yield line, "text", (len(h.group(1)) if h.group(1).startswith("#") else int(h.group(1)), h.group(2)) if h else None
+        yield line, "text", (len(h.group(1)) if h.group(1).startswith("#") else int(h.group(1)), h.group(2).rstrip().rstrip("#").rstrip()) if h else None
 
 
 def extract_usage(readme):
@@ -222,6 +222,7 @@ def analyze_once(fetch_readme, conn, now):
             continue
         try:
             readme = fetch_readme(repo["full_name"])
+            readme["content"] = readme["content"].replace("\x00", "")   # Postgres text는 NUL을 못 담는다 (UTF-16 README)
         except NotFound:
             _record_failure(conn, repo["id"], now, "README 없음")
             failed += 1

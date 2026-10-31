@@ -9,6 +9,7 @@
 import asyncio
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
 from contextlib import asynccontextmanager, closing
@@ -44,6 +45,7 @@ def handle(alert, prom, now, conn, hands, after=None):
     after: 재진단이면 (안 먹힌 앞선 기록, 이유). "안 먹혔다"를 첫 증거로 남기고, 같은 조치를 또 고르면 사람에게.
     LLM이 있으면 그 판단으로 조치하고, 실패하면 점검표 판단으로 간다. 두 판단은 늘 함께 남긴다 (#12 채점).
     ponytail: 재진단은 점검표만 본다 (경보 하나에 LLM 1번). LLM이 다른 원인을 찾을 기회는 없고 같은 조치면 사람에게 간다."""
+    started = time.monotonic()
     kind = alert.get("labels", {}).get("alertname")
     sli, severity = KINDS.get(kind, (None, "unknown"))
     tape, kube, prom_ = checklist.recorder(hands.kube, prom)
@@ -77,8 +79,8 @@ def handle(alert, prom, now, conn, hands, after=None):
     conn.execute("INSERT INTO snapshots (record_id, taken, tape) VALUES (?, ?, ?)",
                  (row["id"], now.timestamp(), json.dumps(tape, ensure_ascii=False)))
     conn.commit()
-    delivered = hands.slack(message(report(record, row, hands), row, hands)) is not False   # False = 보내다 실패, 보낼 곳이 없는 로컬은 None
-    row = actions.arm(conn, row, delivered)
+    delivered = hands.slack(message(report(record, row, hands), row, hands)) is True   # False = 보내다 실패, None = 보낼 곳 없음. 둘 다 본 사람이 없다
+    row = actions.arm(conn, row, delivered, time.monotonic() - started)
     return {**record, **{k: row[k] for k in ("id", "action", "tier", "state")}}
 
 

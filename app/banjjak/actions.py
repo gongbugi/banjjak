@@ -120,10 +120,14 @@ def plan(conn, record, now, tried=None, gate=None):
     return {**_row(conn, cur.lastrowid), "due": due}   # DB의 due는 보고가 나간 뒤에 적는다 (arm)
 
 
+def _rejected(conn, action, now):
+    return conn.execute("SELECT 1 FROM records WHERE action = ? AND state = 'rejected' AND decided > ?",
+                        (action, (now - HOUR).timestamp())).fetchone()
+
+
 def _held(conn, record, action, now, tried):
     """타이머로 실행하면 안 되는 이유. 사람이 이미 답했거나 판단이 엇갈린 조치는 승인을 기다린다."""
-    if conn.execute("SELECT 1 FROM records WHERE action = ? AND state = 'rejected' AND decided > ?",
-                    (action, (now - HOUR).timestamp())).fetchone():
+    if _rejected(conn, action, now):
         return "1시간 안에 거부한 조치"
     # 재전송은 LLM을 다시 부르지 않아 앞선 unknown · ask_human · jev 보류가 안 보인다 → 같은 경보면 타이머를 걸지 않는다
     if not tried and conn.execute(
@@ -137,12 +141,12 @@ def _held(conn, record, action, now, tried):
     return None
 
 
-def arm(conn, row, delivered):
+def arm(conn, row, delivered, late=0):   # late: 진단 시작부터 보고까지 걸린 초. 5분은 보고가 나간 때부터 센다
     """T1 타이머는 보고가 나간 뒤에 건다: "5분 안에 거부할 수 있었다"가 성립해야 무응답을 동의로 친다."""
     if row["tier"] != "T1":
         return row
     if delivered:
-        conn.execute("UPDATE records SET due = ? WHERE id = ?", (row["due"], row["id"]))
+        conn.execute("UPDATE records SET due = ? WHERE id = ?", (row["due"] + int(late), row["id"]))
     else:
         conn.execute("UPDATE records SET tier = 'T2', result = '보고 실패 → T2로 올림' WHERE id = ?", (row["id"],))
     conn.commit()
@@ -202,7 +206,7 @@ def _carry_out(conn, row, now, hands, by, timer=False):
     # 드라이런도 읽기는 다 해서 실제로 보낼 요청까지 만든다. 쓰기만 하지 않는다
     patch = hands.patch if execute else (lambda path, body, content_type: None)
     before = _snapshot(hands.prom) if execute else (None, None)   # 악화는 "조치 직전" 대비
-    why = _changed(row, now, hands, timer)
+    why = _changed(conn, row, now, hands, timer)
     if why:
         return _finish(conn, row, now, "skipped", f"{why} ({by})", hands)
     try:
@@ -218,8 +222,10 @@ def _carry_out(conn, row, now, hands, by, timer=False):
     return done
 
 
-def _changed(row, now, hands, timer):
+def _changed(conn, row, now, hands, timer):
     """실행 직전에 다시 본다. 진단 때와 달라졌거나 못 보면 그 이유 (실행하지 않는다). 경보가 풀렸는지는 타이머만 본다: 사람의 승인은 그걸 알고 누른 것이다."""
+    if timer and _rejected(conn, row["action"], now):   # 같은 조치로 먼저 걸린 타이머도 멈춘다
+        return "1시간 안에 거부한 조치"
     if now.timestamp() - row["created"] > STALE.total_seconds():
         return f"진단한 지 {int(STALE.total_seconds() // 3600)}시간이 넘었다"
     try:

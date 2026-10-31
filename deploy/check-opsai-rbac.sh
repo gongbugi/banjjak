@@ -42,6 +42,10 @@ if [ "$mode" = execute ]; then
   admit no deployment/web "[{\"op\":\"add\",\"path\":\"$web/serviceAccountName\",\"value\":\"ops-ai\"}]"
   admit no deployment/web "[{\"op\":\"add\",\"path\":\"$web/volumes/-\",\"value\":{\"name\":\"x\",\"emptyDir\":{}}}]"
   admit no deployment/web "[{\"op\":\"add\",\"path\":\"$web/hostNetwork\",\"value\":true}]"
+  admit no deployment/web "[{\"op\":\"add\",\"path\":\"$web/containers/0/lifecycle\",\"value\":{\"postStart\":{\"exec\":{\"command\":[\"sh\",\"-c\",\"true\"]}}}}]"
+  admit no deployment/web "[{\"op\":\"add\",\"path\":\"$web/containers/0/startupProbe\",\"value\":{\"exec\":{\"command\":[\"sh\",\"-c\",\"true\"]}}}]"
+  admit no deployment/web "[{\"op\":\"add\",\"path\":\"$web/hostAliases\",\"value\":[{\"ip\":\"10.0.0.9\",\"hostnames\":[\"postgres\"]}]}]"
+  admit no deployment/web "[{\"op\":\"add\",\"path\":\"$web/containers/0/env/-\",\"value\":{\"name\":\"DATABASE_URL\",\"value\":\"x\"}}]"
   admit yes cronjob/collector '[{"op":"add","path":"/spec/suspend","value":false}]'
   admit no cronjob/collector '[{"op":"add","path":"/spec/suspend","value":true}]'
   admit no cronjob/analyzer '[{"op":"replace","path":"/spec/schedule","value":"* * * * *"}]'

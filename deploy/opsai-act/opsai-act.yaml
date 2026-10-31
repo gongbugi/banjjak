@@ -46,13 +46,17 @@ spec:
       expression: object.spec.template.spec
     - name: old
       expression: oldObject.spec.template.spec
-    # 파드 쪽 바뀌면 안 되는 칸 (이미지 · 평문 환경 변수 · 자원 · 검사는 판마다 다를 수 있다)
+    # 파드 쪽 바뀌면 안 되는 칸 (이미지 · 평문 환경 변수 · 자원은 판마다 다를 수 있다). 검사 · lifecycle은 exec로 명령을 돌릴 수 있어 막는다
     - name: pods
       expression: >-
         [variables.new, variables.old].map(p, {
           'account': dyn(p.?serviceAccountName.orValue('')),
           'security': dyn(p.?securityContext.orValue({})),
           'volumes': dyn(p.?volumes.orValue([])),
+          'aliases': dyn(p.?hostAliases.orValue([])),
+          'dnsConfig': dyn(p.?dnsConfig.orValue({})),
+          'dnsPolicy': dyn(p.?dnsPolicy.orValue('')),
+          'shareProcess': dyn(p.?shareProcessNamespace.orValue(false)),
           'host': dyn([p.?hostNetwork.orValue(false), p.?hostPID.orValue(false), p.?hostIPC.orValue(false)]),
           'containers': dyn((p.containers + p.?initContainers.orValue([])).map(c, {
             'name': dyn(c.name),
@@ -60,6 +64,10 @@ spec:
             'args': dyn(c.?args.orValue([])),
             'envFrom': dyn(c.?envFrom.orValue([])),
             'mounts': dyn(c.?volumeMounts.orValue([])),
+            'lifecycle': dyn(c.?lifecycle.orValue({})),
+            'liveness': dyn(c.?livenessProbe.orValue({})),
+            'readiness': dyn(c.?readinessProbe.orValue({})),
+            'startup': dyn(c.?startupProbe.orValue({})),
             'security': dyn(c.?securityContext.orValue({})),
             'secrets': dyn(c.?env.orValue([]).filter(e, has(e.valueFrom)))}))})
   validations:
@@ -72,8 +80,13 @@ spec:
           .all(c, c.image.matches('^(ghcr[.]io/gongbugi/)?banjjak:[^/]+$'))
       message: 롤백은 이 프로젝트 이미지로만 한다
     - expression: >-
-        object.kind != 'Deployment' || (object.spec.replicas == oldObject.spec.replicas && variables.pods[0] == variables.pods[1])
-      message: 롤백은 계정 · 볼륨 · 실행 명령 · Secret 참조를 바꾸지 않는다
+        object.kind != 'Deployment' || (object.spec.replicas == oldObject.spec.replicas && variables.pods[0] == variables.pods[1]
+          && object.spec.template.metadata.?labels.orValue({}) == oldObject.spec.template.metadata.?labels.orValue({}))
+      message: 롤백은 계정 · 볼륨 · 실행 명령 · 검사 · 네트워크 · 라벨 · Secret 참조를 바꾸지 않는다
+    - expression: >-
+        object.kind != 'Deployment' || (variables.new.containers + variables.new.?initContainers.orValue([])).all(c,
+          c.?env.orValue([]).all(e, has(e.valueFrom) || !c.env.exists(s, s.name == e.name && has(s.valueFrom))))
+      message: 평문 환경 변수로 Secret 환경 변수를 덮어쓰지 못한다
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

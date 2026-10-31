@@ -39,6 +39,9 @@ REQUEST_SECONDS = Histogram(
     "banjjak_http_request_duration_seconds", "web request latency", ["route", "method", "status", "source"],
     buckets=(0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10))
 
+# 모르는 method는 한 칸으로: 요청이 고른 글자가 그대로 라벨이 되면 지표 메모리가 끝없이 는다
+METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+
 
 @app.middleware("http")
 async def _observe(request: Request, call_next):
@@ -51,7 +54,7 @@ async def _observe(request: Request, call_next):
         # 실제 주소가 아니라 경로 틀로 센다. 모르는 주소는 한 칸으로 (지표 종류가 끝없이 늘지 않게)
         route = request.scope.get("route")
         source = "probe" if request.headers.get("user-agent") == PROBE_AGENT else "user"
-        REQUEST_SECONDS.labels(route.path if route else "unmatched", request.method, str(status), source).observe(
+        REQUEST_SECONDS.labels(route.path if route else "unmatched", request.method if request.method in METHODS else "OTHER", str(status), source).observe(
             time.perf_counter() - start)
 
 
