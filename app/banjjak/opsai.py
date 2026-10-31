@@ -22,6 +22,8 @@ from banjjak.heartbeat import ping
 
 BEAT_EVERY = 60   # 초. Better Stack에는 더 긴 간격으로 걸어 한두 번 빠져도 버틴다
 TICK_EVERY = 15   # 초. 5분 기다린 T1 실행 · 실행한 조치 확인을 보는 주기
+MAX_BODY = 1_000_000   # 바이트. 경보 하나마다 앱 클러스터 읽기 11번 · 쿼리 8번이 든다
+MAX_ALERTS = 20         # 한 번에 진단할 경보 수. 규칙이 7개이고 이름별로 묶어 온다
 
 # 분류는 코드다: 종류 = 알림 규칙 이름, 심각도 = 그 규칙이 지키는 SLI (목표값은 스펙 #1)
 # critical: 방문자가 지금 못 쓰거나 운영자가 아무것도 못 본다. warning: 쓸 수는 있는데 목표를 벗어났다
@@ -50,6 +52,10 @@ def handle(alert, prom, now, conn, hands, after=None):
               "startsAt": alert.get("startsAt"), "fingerprint": alert.get("fingerprint"), "sli": sli,
               "severity": severity, **found, "checklist": found}
     checklist.sweep(kube, prom_, now)   # 이 점검표가 안 본 읽기까지 녹화 (#20 진단기를 같은 상태로 다시 돌린다)
+    try:
+        record["revision"] = actions.revision(kube)   # 롤백은 이 판일 때만 실행한다
+    except Exception:
+        record["revision"] = None
     if hands.llm and not after and kind in KINDS:
         try:
             said = hands.llm(conn, alert, tape, now)
@@ -71,7 +77,8 @@ def handle(alert, prom, now, conn, hands, after=None):
     conn.execute("INSERT INTO snapshots (record_id, taken, tape) VALUES (?, ?, ?)",
                  (row["id"], now.timestamp(), json.dumps(tape, ensure_ascii=False)))
     conn.commit()
-    hands.slack(message(report(record, row, hands), row, hands))
+    delivered = hands.slack(message(report(record, row, hands), row, hands)) is not False   # False = 보내다 실패, 보낼 곳이 없는 로컬은 None
+    row = actions.arm(conn, row, delivered)
     return {**record, **{k: row[k] for k in ("id", "action", "tier", "state")}}
 
 
@@ -113,7 +120,12 @@ def on_click(payload, now, conn, hands, approver, respond):
     if cluster != hands.cluster:   # 같은 번호의 다른 기록을 건드리지 않는다
         return respond(url, {"response_type": "ephemeral", "replace_original": False,
                              "text": f"다른 클러스터({cluster or '모름'})의 버튼이라 여기({hands.cluster})서는 처리하지 않는다"})
-    row = actions.decide(conn, record_id, clicked["action_id"] == "approve", now, hands, by="Slack 버튼")
+    try:
+        row = actions.decide(conn, record_id, clicked["action_id"] == "approve", now, hands, by="Slack 버튼")
+    except Exception as e:   # 거부가 조용히 사라지면 타이머가 그대로 실행한다 → 누른 사람에게 알린다
+        print(f"button failed: {type(e).__name__}: {e}", flush=True)
+        return respond(url, {"response_type": "ephemeral", "replace_original": False,
+                             "text": f"처리하지 못했다 ({type(e).__name__}). 타이머는 그대로니 다시 눌러 주세요"})
     original = payload.get("message", {}).get("text", "")
     if row is None:   # 5분 무응답으로 이미 실행됐거나 이미 누른 버튼
         found = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
@@ -121,7 +133,7 @@ def on_click(payload, now, conn, hands, approver, respond):
             return respond(url, {"response_type": "ephemeral", "replace_original": False,
                                  "text": f"기록 #{record_id}이 없다"})
         # 타이머로 끝난 조치는 원래 글의 버튼을 지울 수단이 없었다 → 지금 결과만 붙이고 버튼을 지운다
-        done = f"이미 끝난 조치: {actions.ICON[found['state']]} · 기록 #{record_id} · {found['result']}"
+        done = f"이미 끝난 조치: {actions.ICON[found['state']]} · 기록 #{record_id}" + (f" · {found['result']}" if found["result"] else "")
     else:
         verdict = "승인" if clicked["action_id"] == "approve" else "거부"
         done = f"{verdict}: {actions.ICON[row['state']]} · 기록 #{row['id']} {actions.ACTIONS[row['action']][1]} · {row['result']}"
@@ -154,8 +166,8 @@ def _slack(message):
     """글(str) 또는 버튼 붙은 글({"text", "blocks"})을 Incoming Webhook으로 보낸다."""
     url = os.environ.get("SLACK_WEBHOOK_URL")   # Secret slack-webhook. 없으면(로컬 · 시험) 기록만 한다
     if not url:
-        return
-    _post(url, message if isinstance(message, dict) else {"text": message})
+        return None
+    return _post(url, message if isinstance(message, dict) else {"text": message})
 
 
 def _respond(url, body):
@@ -169,8 +181,10 @@ def _post(url, body):
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     try:
         urllib.request.urlopen(req, timeout=10).close()
+        return True
     except Exception as e:   # 보고가 실패해도 기록은 남았다
         print(f"slack failed: {e}", flush=True)
+        return False
 
 
 def _buttons():
@@ -202,7 +216,8 @@ def _buttons():
 def _hands():
     # 실행 여부는 클러스터마다 (ConfigMap ops-ai-env). 값이 없으면 안전한 쪽(dry-run)
     return actions.Hands(_kube, _patch, _slack, os.environ.get("ACTIONS", "dry-run"),
-                         os.environ.get("CLUSTER_NAME", "unknown"), bool(os.environ.get("SLACK_APP_TOKEN")), _prom,
+                         os.environ.get("CLUSTER_NAME", "unknown"),
+                         bool(os.environ.get("SLACK_APP_TOKEN") and os.environ.get("SLACK_APPROVER")), _prom,
                          _llm if os.environ.get("ANTHROPIC_API_KEY") else None,   # Secret anthropic. 없으면 점검표만
                          llm.gate if os.environ.get("TYPESAFE_API_KEY") else None)   # Secret typesafe. 없으면 표대로
 
@@ -274,9 +289,11 @@ def metrics():
 
 @app.post("/alerts")
 async def alerts(request: Request, background: BackgroundTasks):
+    if len(await request.body()) > MAX_BODY:
+        return Response(status_code=413)
     body = await request.json()
     received = body.get("alerts", [])
-    for a in received:
+    for a in received[:MAX_ALERTS]:
         # 받은 것은 울림 · 풀림 모두 한 줄씩 (풀린 시각이 복구 시간 채점의 끝이다)
         print(json.dumps({
             "event": "alert", "status": a.get("status"), "alertname": a.get("labels", {}).get("alertname"),

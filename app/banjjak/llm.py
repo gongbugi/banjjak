@@ -31,7 +31,8 @@ DEADLINE = 90          # 진단 1건 (초)
 
 # 100만 토큰당 (입력, 5분 캐시 쓰기, 캐시 읽기, 출력). 공식 가격표 2026-10-30
 PRICES = {"claude-sonnet-5-5": (2.0, 2.5, 0.10, 10.0), "claude-haiku-5-5": (0.10, 0.125, 0.01, 0.50)}
-CAPS = {"live": {"day": 1.0, "total": 3.0, "hour": 6}, "replay": {"total": 8.0}}
+# ponytail: kind = 경보 종류 하나가 시간당 쓸 수 있는 진단 수. 한 종류가 하루 내내 울리면 하루 상한은 쓸 수 있다 (그날 LLM만 꺼지고 점검표는 돈다)
+CAPS = {"live": {"day": 1.0, "total": 3.0, "hour": 6, "kind": 2}, "replay": {"total": 8.0}}
 
 # 장애 스위치의 이름들. 테이프의 자유 글에 있으면 그 건은 LLM에 보내지 않는다. delay는 흔한 말이라 넣지 않는다
 FORBIDDEN = ("FAULT", "web-fault", "fault.json", "error_rate")
@@ -106,8 +107,9 @@ def client():
 def judge(conn, alert, tape, now, client, ledger="live", model=MODEL, effort=EFFORT, thinking=None):
     """테이프 한 장 → 진단기 경계 모양 + ask_human, 또는 {"failed": 이유}. 실패해도 운영 AI는 점검표로 돈다.
     tell: 상한에 처음 닿았다 (Slack에 한 번 알린다). 같은 경보의 재전송은 LLM을 다시 부르지 않는다 (실시간 장부만)."""
-    key = f"{alert.get('fingerprint')}|{alert.get('startsAt')}" if ledger == "live" else None
-    why = _closed(conn, ledger, now)
+    kind = alert["labels"]["alertname"]
+    key = f"{kind}|{alert.get('fingerprint')}|{alert.get('startsAt')}" if ledger == "live" else None
+    why = _closed(conn, ledger, now, kind)
     if why:
         DIAGNOSES.labels("capped").inc()
         return {"failed": why, "tell": _first_today(conn, ledger, now)}
@@ -117,7 +119,7 @@ def judge(conn, alert, tape, now, client, ledger="live", model=MODEL, effort=EFF
     _log(conn, now, ledger, "start", key)
     started = time.monotonic()
     try:
-        result = _loop(conn, alert["labels"]["alertname"], tape, now, client, ledger, model, effort, thinking)
+        result = _loop(conn, kind, tape, now, client, ledger, model, effort, thinking)
     except Exception as e:
         DIAGNOSES.labels("failed").inc()
         return {"failed": f"{type(e).__name__}: {e}"[:200]}
@@ -248,12 +250,16 @@ def _over(conn, ledger, now):
     return None
 
 
-def _closed(conn, ledger, now):
-    """새 진단을 시작해도 되나. 깜빡이는 경보 여러 개가 동시에 돈을 쓰지 못하게 시간당 건수도 본다."""
-    hour = CAPS[ledger].get("hour")
-    if hour and conn.execute("SELECT count(*) FROM llm_calls WHERE ledger = ? AND kind = 'start' AND at > ?",
-                             (ledger, (now - timedelta(hours=1)).timestamp())).fetchone()[0] >= hour:
-        return f"시간당 {hour}건"
+def _closed(conn, ledger, now, kind):
+    """새 진단을 시작해도 되나. 깜빡이는 경보 여러 개가 동시에 돈을 쓰지 못하게 시간당 건수도 본다.
+    입구 거절처럼 공개 요청으로 다시 울리는 경보가 진짜 장애의 몫을 쓰지 못하게 종류별로도 본다."""
+    cap, since = CAPS[ledger], (now - timedelta(hours=1)).timestamp()
+    starts = lambda like: conn.execute("SELECT count(*) FROM llm_calls WHERE ledger = ? AND kind = 'start' AND at > ? AND note LIKE ?",
+                                       (ledger, since, like)).fetchone()[0]
+    if "hour" in cap and starts("%") >= cap["hour"]:
+        return f"시간당 {cap['hour']}건"
+    if "kind" in cap and starts(f"{kind}|%") >= cap["kind"]:
+        return f"{kind} 시간당 {cap['kind']}건"
     return _over(conn, ledger, now)
 
 
@@ -271,6 +277,7 @@ def _first_today(conn, ledger, now):
 JEV = "jev-1.14.0"
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 JEV_PRICE = 0.042   # 입력 100만 토큰당 달러. 출력은 무료
+JEV_MAX_TOKENS = 100_000   # 근거 몇 줄이 입력이다 (실측 수백 토큰)
 HIGH, LOW = 0.8, 0.3
 RESUMES = ("resume_collector", "resume_analyzer")   # LOW만 넘으면 T1 그대로
 # 조치 효과까지 묻는 질문은 맞는 원인과 틀린 원인이 겹쳤다 (재생 10-30). jev는 글자 그대로 읽으니 근거와 원인만 묻는다
@@ -299,8 +306,12 @@ def gate(conn, record, action, now, post=_jev):
         p = float(said["answers"]["points"]["noul"])
         if not 0 <= p <= 1:
             raise ValueError(f"확률이 아니다: {p}")
-        tokens = said["usage"]["input_tokens"]
-        _log(conn, now, "live", "gate", action, JEV, (tokens, 0, 0, 0), tokens * JEV_PRICE / 1_000_000)
     except Exception as e:
         return {"failed": f"{type(e).__name__}: {e}"[:200], "say": "keep"}
+    # 밖에서 온 숫자를 비용 상한 원장에 그대로 넣지 않는다 (음수면 상한이 다시 열린다). 이상하면 0으로 적고 점수는 쓴다
+    tokens = said["usage"].get("input_tokens") if isinstance(said.get("usage"), dict) else None
+    if type(tokens) is not int or not 0 <= tokens <= JEV_MAX_TOKENS:
+        print(f"jev usage 이상: {tokens!r}"[:200], flush=True)
+        tokens = 0
+    _log(conn, now, "live", "gate", action, JEV, (tokens, 0, 0, 0), tokens * JEV_PRICE / 1_000_000)
     return {"p": p, "say": "keep" if p >= (LOW if action in RESUMES else HIGH) else "approve" if p >= LOW else "hold"}

@@ -12,7 +12,7 @@ from test_opsai import NOW, Ops, cluster, fake_kube, fake_prom, firing
 
 from banjjak import checklist, llm
 from banjjak.actions import ACTIONS, connect
-from banjjak.opsai import app, handle
+from banjjak.opsai import KINDS, app, handle
 
 USAGE = {"input_tokens": 1000, "output_tokens": 100, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
 ALL_TOOLS = [("deployment", {}), ("pods", {"app": "web"}), ("pods", {"app": "postgres"}), ("cronjob", {"name": "collector"}),
@@ -76,7 +76,7 @@ SUSPENDED = [asks(("cronjob", {"name": "collector"})), answer("collector_suspend
 def test_llm_judgment_picks_the_action_and_both_judgments_are_kept(tmp_path):
     ops = ops_with(tmp_path, Fake(*SUSPENDED), fake_kube(cluster(last_success="2026-10-21T13:00:20Z")))
     result = ops.alert("DataStale")
-    assert (result["cause"], result["action"], result["tier"]) == ("collector_suspended", "resume_collector", "T1")
+    assert (result["cause"], result["action"], result["tier"]) == ("collector_suspended", "resume_collector", "T2")   # 점검표는 못 찾았다
     assert result["diagnoser"] == llm.NAME
     assert result["checklist"]["cause"] is None and result["llm"]["cause"] == "collector_suspended"
     assert result["evidence"] == [{"look": "cronjob", "saw": "켜져 있음"}]
@@ -250,7 +250,7 @@ def test_a_new_firing_of_the_same_rule_is_a_new_alert(conn):
 
 def test_no_more_than_six_llm_diagnoses_an_hour(conn):
     fake = Fake(*[answer("unknown") for _ in range(8)])
-    results = [llm.judge(conn, {**firing("DataStale"), "fingerprint": f"f{i}"}, tape_of(), NOW, fake) for i in range(7)]
+    results = [llm.judge(conn, {**firing(kind), "fingerprint": f"f{i}"}, tape_of(), NOW, fake) for i, kind in enumerate(KINDS)]
     assert ["failed" in r for r in results] == [False] * 6 + [True]
     later = NOW + timedelta(hours=1, seconds=1)
     assert "failed" not in llm.judge(conn, {**firing("DataStale"), "fingerprint": "f9"}, tape_of(), later, fake)
@@ -316,6 +316,14 @@ def test_rediagnosis_stays_with_the_checklist(tmp_path):
                        after=(first, "70분 안에 풀리지 않았다"))
     assert again["diagnoser"] == checklist.NAME and "llm" not in again
     assert len(fake.requests) == 2
+
+
+def test_one_alert_kind_cannot_spend_the_hourly_pool(conn):
+    # 입구 거절 경보는 공개 요청으로 다시 울릴 수 있다 → 한 종류가 진짜 장애의 LLM 몫을 다 쓰지 못하게 한다
+    fake = Fake(*[answer("unknown") for _ in range(4)])
+    flood = [llm.judge(conn, {**firing("WebRequestsRejected"), "fingerprint": f"f{i}"}, tape_of(), NOW, fake) for i in range(3)]
+    assert ["failed" in r for r in flood] == [False, False, True]
+    assert "failed" not in llm.judge(conn, firing("DataStale"), tape_of(), NOW, fake)
 
 
 # --- jev 게이트 ---
@@ -408,6 +416,24 @@ def test_gate_usage_goes_on_the_live_ledger(conn):
     record = {"alertname": "DataStale", "sli": None, "verdict": "x", "evidence": []}
     llm.gate(conn, record, "resume_collector", NOW, jev(0.9))
     assert llm.spent(conn, "live") == pytest.approx(200 * 0.042 / 1_000_000)
+
+
+@pytest.mark.parametrize("usage", [{"input_tokens": -71_000_000}, {"input_tokens": 10**12}, {"input_tokens": "200"}, {}, None])
+def test_gate_does_not_trust_the_usage_it_is_told(conn, usage):
+    seed(conn, "live", 3.0)
+    post = lambda body: {"answers": {"points": {"noul": 0.1}}, "usage": usage}
+    record = {"alertname": "DataStale", "sli": None, "verdict": "x", "evidence": []}
+    assert llm.gate(conn, record, "rollback_web", NOW, post)["say"] == "hold"   # 점수는 그대로 쓴다
+    assert llm._over(conn, "live", NOW)   # 상한이 다시 열리지 않는다
+
+
+def test_llm_disagreeing_with_the_checklist_asks_first(tmp_path):
+    ops = ops_with(tmp_path, Fake(), fake_kube(cluster()))
+    ops.hands = ops.hands._replace(llm=lambda conn, alert, tape, now: {
+        "diagnoser": llm.NAME, "cause": "collector_suspended", "verdict": "x", "evidence": [], "ask_human": False})
+    row = ops.alert("DataStale")
+    assert (row["action"], row["tier"]) == ("resume_collector", "T2")
+    assert "LLM과 점검표의 원인이 다르다" in ops.sent[-1]
 
 
 # --- 지표 ---

@@ -26,6 +26,7 @@ from banjjak.checklist import NS, _t
 CHANCE = float(os.environ.get("CHAOS_CHANCE", 5 / (7 * 24 * 6)))
 MIN_GAP = timedelta(hours=float(os.environ.get("CHAOS_GAP_HOURS", 12)))
 AFTER_DEPLOY = timedelta(minutes=30)
+UNSURE = timedelta(minutes=30)   # 넣기가 끝나지 못한 기록을 언제 되돌리나
 WEIGHTS = {                         # 종류 → 가중치. 조치해야 풀리는 둘(나쁜 배포 · 수집 멈춤)이 1/3
     "web_pod_kill": 1, "db_pod_kill": 1, "latency": 2, "errors": 2, "bad_deploy": 2, "collector_suspend": 2,
     "surge": 2}                     # 급증(#11)은 맨 끝: 부하 토큰이 없으면 빼고 고른다
@@ -85,12 +86,15 @@ def run_once(conn, now, app, dice, switch):
 
 
 def inject(conn, kind, now, app, dice, manual=False):
-    """장애 하나를 넣고 정답을 기록한다. 손으로 넣을 때(낮 시험 주입)도 이것을 쓴다."""
-    params, until = INJECT[kind](app, now, dice)
-    conn.execute("INSERT INTO injections (kind, manual, params, started, until, state) VALUES (?, ?, ?, ?, ?, 'active')",
-                 (kind, int(manual), json.dumps(params), now.timestamp(), until.timestamp()))
+    """장애 하나를 넣고 정답을 기록한다. 손으로 넣을 때(낮 시험 주입)도 이것을 쓴다.
+    기록이 먼저다: 응답을 못 받은 넣기도 들어갔을 수 있고, 되돌리기 · 끄기는 기록만 보고 움직인다. unsure가 남으면 넣기 결과를 모른다."""
+    id_ = conn.execute("INSERT INTO injections (kind, manual, params, started, until, state) VALUES (?, ?, ?, ?, ?, 'active')",
+                       (kind, int(manual), json.dumps({"unsure": True}), now.timestamp(), (now + UNSURE).timestamp())).lastrowid
     conn.commit()
-    return dict(conn.execute("SELECT * FROM injections ORDER BY id DESC LIMIT 1").fetchone())
+    params, until = INJECT[kind](app, now, dice)
+    conn.execute("UPDATE injections SET params = ?, until = ? WHERE id = ?", (json.dumps(params), until.timestamp(), id_))
+    conn.commit()
+    return dict(conn.execute("SELECT * FROM injections WHERE id = ?", (id_,)).fetchone())
 
 
 def _pick(dice, weights):

@@ -90,3 +90,22 @@ spec:
   ports:
     - port: 8080
       targetPort: 8080
+---
+# /alerts에는 인증이 없다 → 이 파드에 닿는 길을 Alertmanager(경보)와 Prometheus(지표 긁기)로 좁힌다. 나가는 길은 그대로
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ops-ai
+spec:
+  podSelector:
+    matchLabels: {app: ops-ai}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: observe}
+          podSelector:
+            matchExpressions:
+              - {key: app, operator: In, values: [alertmanager, prometheus]}
+      ports:
+        - port: 8080

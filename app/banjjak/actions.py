@@ -1,7 +1,8 @@
 """운영 AI ② · ③: 원인 코드 → 조치 · 등급 → 기다림 → 실행 → 확인 (또는 거부 · 드라이런 · 사람에게).
 
 등급은 조치 종류가 코드로 정한다. 같은 조치를 1시간에 2번 넘게 하면 한 단계 올린다 (볼트 02 운영 AI 조치 등급).
-T1: 5분 안에 거부가 없으면 실행. T2: 승인 전에는 실행하지 않는다. T0는 첫 T0 조치(#20 LLM 대체 모델)와 함께 만든다.
+T1: 보고가 나간 뒤 5분 안에 거부가 없으면 실행. T2: 승인 전에는 실행하지 않는다. T0는 첫 T0 조치(#20 LLM 대체 모델)와 함께 만든다.
+승인 · 타이머는 기록 번호만 가리키므로 실행 직전에 진단 때와 같은지 다시 본다 (보안 점검 1회차).
 확인(#9): 실행한 조치는 정해진 시간 동안 1분마다 본다. 경보가 풀리면 회복, 나빠지면 바로 사람에게,
 시간 안에 안 풀리면 재진단 1회(opsai.tick) → 그 조치도 안 먹히면 사람에게.
 판단 · 조치 · 확인 기록은 SQLite(운영 VM 디스크)에 둔다 → 파드가 바뀌어도 이어받는다.
@@ -17,6 +18,7 @@ from banjjak.checklist import NS, _t
 
 WAIT = timedelta(minutes=5)   # T1 무응답 대기 (본인 결정)
 HOUR = timedelta(hours=1)
+STALE = timedelta(hours=1)   # 이보다 오래된 진단으로는 실행하지 않는다 (T2는 마감이 없어 며칠 뒤 버튼도 눌린다)
 KST = timezone(timedelta(hours=9))
 
 # 조치 → (등급, 사람이 읽을 이름)
@@ -48,7 +50,7 @@ ERR = ('(sum(rate(banjjak_http_request_duration_seconds_count{route=~"/|/api/tre
        ' / sum(rate(banjjak_http_request_duration_seconds_count{route=~"/|/api/trending"}[5m]))')
 P95 = 'histogram_quantile(0.95, sum by (le) (rate(banjjak_http_request_duration_seconds_bucket{route=~"/|/api/trending"}[5m])))'
 
-# records.state: human(조치 없음) · waiting · executed · dry_run · rejected · failed
+# records.state: human(조치 없음) · waiting · running(실행 중) · executed · dry_run · rejected · failed · skipped(실행 직전에 멈춤)
 # checks.state: checking · recovered · not_recovered · worse
 SCHEMA = """CREATE TABLE IF NOT EXISTS records (
     id INTEGER PRIMARY KEY, created REAL NOT NULL, alertname TEXT, cause TEXT, action TEXT, tier TEXT,
@@ -99,6 +101,8 @@ def plan(conn, record, now, tried=None, gate=None):
             tier, note = "T2", f"1시간에 {before + 1}번째 → T2로 올림"
         if tier == "T1" and record.get("ask_human"):
             tier, note = "T2", "LLM이 승인을 요청 → T2로 올림"
+        if tier == "T1" and (why := _held(conn, record, action, now, tried)):
+            tier, note = "T2", f"{why} → T2로 올림"
         if tier == "T1" and gate:
             record["gate"] = said = gate(conn, record, action, now)
             if said["say"] == "approve":
@@ -110,10 +114,39 @@ def plan(conn, record, now, tried=None, gate=None):
     cur = conn.execute(
         "INSERT INTO records (created, alertname, cause, action, tier, state, due, result, diagnosis)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (now.timestamp(), record["alertname"], record["cause"], action, tier, state, due, note,
+        (now.timestamp(), record["alertname"], record["cause"], action, tier, state, None, note,
          json.dumps(record, ensure_ascii=False)))
     conn.commit()
-    return _row(conn, cur.lastrowid)
+    return {**_row(conn, cur.lastrowid), "due": due}   # DB의 due는 보고가 나간 뒤에 적는다 (arm)
+
+
+def _held(conn, record, action, now, tried):
+    """타이머로 실행하면 안 되는 이유. 사람이 이미 답했거나 판단이 엇갈린 조치는 승인을 기다린다."""
+    if conn.execute("SELECT 1 FROM records WHERE action = ? AND state = 'rejected' AND decided > ?",
+                    (action, (now - HOUR).timestamp())).fetchone():
+        return "1시간 안에 거부한 조치"
+    # 재전송은 LLM을 다시 부르지 않아 앞선 unknown · ask_human · jev 보류가 안 보인다 → 같은 경보면 타이머를 걸지 않는다
+    if not tried and conn.execute(
+            "SELECT 1 FROM records WHERE json_extract(diagnosis, '$.fingerprint') = ? AND json_extract(diagnosis, '$.startsAt') = ?",
+            (record.get("fingerprint"), record.get("startsAt"))).fetchone():
+        return "같은 경보를 다시 받았다"
+    if record["cause"] != record["checklist"]["cause"]:
+        return "LLM과 점검표의 원인이 다르다"
+    if record["alertname"] == "EntranceErrorsHigh" and action == "rollback_web":
+        return "입구 오류에는 공개 확인 경로의 503도 섞인다"
+    return None
+
+
+def arm(conn, row, delivered):
+    """T1 타이머는 보고가 나간 뒤에 건다: "5분 안에 거부할 수 있었다"가 성립해야 무응답을 동의로 친다."""
+    if row["tier"] != "T1":
+        return row
+    if delivered:
+        conn.execute("UPDATE records SET due = ? WHERE id = ?", (row["due"], row["id"]))
+    else:
+        conn.execute("UPDATE records SET tier = 'T2', result = '보고 실패 → T2로 올림' WHERE id = ?", (row["id"],))
+    conn.commit()
+    return _row(conn, row["id"])
 
 
 def describe(row, mode, buttons):
@@ -134,24 +167,34 @@ def tick(conn, now, hands):
     """기다린 지 5분이 지난 T1을 실행한다 (거부가 없었다). 운영 AI가 주기적으로 부른다."""
     for row in conn.execute("SELECT * FROM records WHERE state = 'waiting' AND due <= ?",
                             (now.timestamp(),)).fetchall():
-        _carry_out(conn, dict(row), now, hands, by="5분 무응답")
+        if _claim(conn, row["id"]):
+            _carry_out(conn, dict(row), now, hands, by="5분 무응답", timer=True)
 
 
 def decide(conn, record_id, approve, now, hands, by):
     """기다리는 조치에 사람이 답한다 (Slack 버튼이 부른다). 이미 끝난 조치면 None."""
-    row = conn.execute("SELECT * FROM records WHERE id = ? AND state = 'waiting'", (record_id,)).fetchone()
-    if row is None:
+    if not _claim(conn, record_id):
         return None
+    row = _row(conn, record_id)
     if approve:
-        return _carry_out(conn, dict(row), now, hands, by)
-    return _finish(conn, dict(row), now, "rejected", f"거부 ({by})", hands)
+        return _carry_out(conn, row, now, hands, by)
+    return _finish(conn, row, now, "rejected", f"거부 ({by})", hands)
+
+
+def _claim(conn, record_id):
+    """기다리는 조치를 한 곳만 잡는다. 타이머 · 승인 · 거부가 겹쳐도 먼저 잡은 쪽만 움직인다.
+    ponytail: 잡은 채 프로세스가 죽으면 running으로 남고 다시 돌지 않는다 (두 번 실행하지 않는 쪽을 골랐다. 경보는 Alertmanager가 따로 보낸다)."""
+    claimed = conn.execute("UPDATE records SET state = 'running' WHERE id = ? AND state = 'waiting'", (record_id,)).rowcount
+    conn.commit()
+    return claimed == 1
 
 
 ICON = {"executed": "✅ 실행", "dry_run": "📝 드라이런 (실행하지 않음)", "rejected": "🚫 거부",
-        "failed": "⚠️ 실패 → 사람이 봐 주세요", "human": "🙋 운영 AI가 할 수 없는 조치 → 사람이 한다"}
+        "failed": "⚠️ 실패 → 사람이 봐 주세요", "human": "🙋 운영 AI가 할 수 없는 조치 → 사람이 한다",
+        "running": "⏳ 실행 중", "skipped": "⏭️ 실행하지 않음 → 사람이 봐 주세요"}
 
 
-def _carry_out(conn, row, now, hands, by):
+def _carry_out(conn, row, now, hands, by, timer=False):
     run = RUN.get(row["action"])
     if run is None:
         return _finish(conn, row, now, "human", by, hands)
@@ -159,6 +202,9 @@ def _carry_out(conn, row, now, hands, by):
     # 드라이런도 읽기는 다 해서 실제로 보낼 요청까지 만든다. 쓰기만 하지 않는다
     patch = hands.patch if execute else (lambda path, body, content_type: None)
     before = _snapshot(hands.prom) if execute else (None, None)   # 악화는 "조치 직전" 대비
+    why = _changed(row, now, hands, timer)
+    if why:
+        return _finish(conn, row, now, "skipped", f"{why} ({by})", hands)
     try:
         state, result = ("executed" if execute else "dry_run"), f"{run(hands.kube, patch)} ({by})"
     except Exception as e:
@@ -170,6 +216,21 @@ def _carry_out(conn, row, now, hands, by):
                      (row["id"], (now + VERIFY[row["action"]]).timestamp(), (now + FIRST_CHECK).timestamp(), *before))
         conn.commit()
     return done
+
+
+def _changed(row, now, hands, timer):
+    """실행 직전에 다시 본다. 진단 때와 달라졌거나 못 보면 그 이유 (실행하지 않는다). 경보가 풀렸는지는 타이머만 본다: 사람의 승인은 그걸 알고 누른 것이다."""
+    if now.timestamp() - row["created"] > STALE.total_seconds():
+        return f"진단한 지 {int(STALE.total_seconds() // 3600)}시간이 넘었다"
+    try:
+        seen = json.loads(row["diagnosis"]).get("revision")
+        if row["action"] == "rollback_web" and (seen is None or seen != revision(hands.kube)):
+            return "진단 뒤 판이 바뀌었다"
+        if timer and hands.prom(f'ALERTS{{alertname="{row["alertname"]}",alertstate="firing"}}') is None:
+            return "경보가 풀렸다"
+    except Exception as e:
+        return f"다시 확인 못 함 ({type(e).__name__})"
+    return None
 
 
 def check(conn, now, hands):
@@ -259,11 +320,15 @@ def _row(conn, record_id):
 
 
 # --- 실행기: 앱 클러스터 banjjak 네임스페이스에 PATCH 한 번. 권한은 RBAC가 이 조치 · 이름으로만 준다 ---
-# ponytail: 롤백 권한은 웹 이미지를 바꿀 수 있는 권한과 같다 (RBAC는 어떤 필드를 바꾸는지까지 못 막는다).
-# 이름 제한 + 이 허용 목록까지가 선이다. 더 막으려면 승인 정책(ValidatingAdmissionPolicy)
+# RBAC는 이름까지, 어떤 필드를 어떻게 바꾸는지는 승인 정책(deploy/opsai-act, ValidatingAdmissionPolicy)이 막는다
 
 REVISION = "deployment.kubernetes.io/revision"
 MERGE = "application/merge-patch+json"
+
+
+def revision(kube):
+    """웹 배포의 지금 판 번호. 진단 때 적어 두고 실행 직전에 견준다."""
+    return kube(f"/apis/apps/v1{NS}/deployments/web")["metadata"].get("annotations", {}).get(REVISION)
 
 
 def _rollback_web(kube, patch):
@@ -281,6 +346,7 @@ def _rollback_web(kube, patch):
     template = copy.deepcopy(prev["spec"]["template"])
     template["metadata"]["labels"].pop("pod-template-hash", None)   # k8s가 다시 붙인다
     patch(f"/apis/apps/v1{NS}/deployments/web", [
+        {"op": "test", "path": "/metadata/annotations/deployment.kubernetes.io~1revision", "value": notes[REVISION]},
         {"op": "replace", "path": "/spec/template", "value": template},
         {"op": "add", "path": "/metadata/annotations/kubernetes.io~1change-cause",
          "value": f"ops-ai rollback to revision {revision(prev)}"},

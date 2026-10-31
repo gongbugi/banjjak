@@ -1,10 +1,12 @@
 import json
+import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
+from banjjak import actions
 from banjjak.actions import PLAN, Hands, connect, decide
 from banjjak.checklist import CHECKLISTS, diagnose, replay
 from banjjak.opsai import app, handle, on_click
@@ -30,7 +32,8 @@ def fake_kube(responses):
 
 
 def fake_prom(values=None):
-    return lambda query: (values or {}).get(query)
+    # 경보는 따로 말하지 않으면 계속 울린다 (T1은 실행 직전에 다시 본다)
+    return lambda query: (values or {}).get(query, 1.0 if query.startswith("ALERTS") else None)
 
 
 NS = "/namespaces/banjjak"
@@ -116,9 +119,10 @@ class Ops:
         with closing(connect(self.db)) as conn:
             on_click(payload, at, conn, self.hands, APPROVER, lambda url, body: self.responses.append((url, body)))
 
-    def alert(self, alertname, at=NOW):
+    def alert(self, alertname, at=NOW, starts=""):   # starts: 다시 울린 경보는 fingerprint가 같아도 시작 시각이 다르다
+        alert = firing(alertname)
         with closing(connect(self.db)) as conn:
-            return handle(firing(alertname), self.prom, at, conn, self.hands)
+            return handle({**alert, "startsAt": alert["startsAt"] + starts}, self.prom, at, conn, self.hands)
 
     def tick(self, at):
         with closing(connect(self.db)) as conn:   # 매번 새 연결 = 파드가 바뀌어도 DB에서 이어받는다
@@ -238,7 +242,7 @@ def test_nothing_found_is_handed_to_a_human():
 def test_errors_right_after_a_deploy():
     record, sent = run("WebErrorRateHigh", fake_kube(cluster(deployed="2026-10-21T13:50:00Z")))
     assert (record["severity"], record["cause"]) == ("critical", "recent_deploy")
-    assert [e["look"] for e in record["evidence"]] == ["웹 최근 배포", "웹 파드", "DB 파드"]
+    assert [e["look"] for e in record["evidence"]] == ["웹 최근 배포", "웹 파드", "DB 파드", "요청량 (지금 / 1시간 전)"]
     assert "10분 전 · deploy a169f9e04c1b" in sent[0]
 
 
@@ -350,7 +354,7 @@ def test_t2_waits_for_approval(tmp_path):
 def test_same_action_more_than_twice_an_hour_goes_up_a_tier(tmp_path):
     ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
     for minutes in (0, 10, 20):
-        ops.alert("DataStale", at=NOW + timedelta(minutes=minutes))
+        ops.alert("DataStale", at=NOW + timedelta(minutes=minutes), starts=str(minutes))
         ops.tick(NOW + timedelta(minutes=minutes + 5))
     assert ops.states() == [("resume_collector", "T1", "executed"), ("resume_collector", "T1", "executed"),
                             ("resume_collector", "T2", "waiting")]
@@ -383,6 +387,7 @@ def test_rollback_goes_back_one_revision(tmp_path):
     ops.tick(NOW + timedelta(minutes=5))
     # 지금 판(5) 바로 앞(4)의 template으로. pod-template-hash는 k8s가 다시 붙인다
     assert ops.patched == [(f"/apis/apps/v1{NS}/deployments/web", [
+        {"op": "test", "path": "/metadata/annotations/deployment.kubernetes.io~1revision", "value": "5"},   # 읽은 판 그대로일 때만
         {"op": "replace", "path": "/spec/template",
          "value": {"metadata": {"labels": {"app": "web"}},
                    "spec": {"containers": [{"name": "web", "image": "ghcr.io/gongbugi/banjjak:good"}]}}},
@@ -485,6 +490,7 @@ def test_a_rediagnosed_action_that_also_fails_goes_to_a_human(tmp_path, monkeypa
     ops.alert("WebLatencyP95High")
     ops.tick(NOW + timedelta(minutes=5))
     state[f"/apis/apps/v1{NS}/deployments/web"]["status"]["conditions"][1]["lastUpdateTime"] = "2026-10-21T15:00:00Z"
+    prom.rps = (None, None)   # 급증이 끝났다 (급증 중이면 최근 배포보다 급증이 앞선다)
     ops.tick(NOW + timedelta(minutes=75))   # 70분 뒤에도 울린다 → 재진단 → 롤백 대기
     ops.tick(NOW + timedelta(minutes=80))   # 롤백 실행
     ops.tick(NOW + timedelta(minutes=90))   # 롤백 10분 뒤에도 울린다
@@ -607,9 +613,9 @@ def test_reject_button_stops_it(tmp_path):
 def test_t2_runs_only_after_approval(tmp_path):
     ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
     for minutes in (0, 10):   # 같은 조치 두 번 → 세 번째는 T2
-        ops.alert("DataStale", at=NOW + timedelta(minutes=minutes))
+        ops.alert("DataStale", at=NOW + timedelta(minutes=minutes), starts=str(minutes))
         ops.tick(NOW + timedelta(minutes=minutes + 5))
-    third = ops.alert("DataStale", at=NOW + timedelta(minutes=20))
+    third = ops.alert("DataStale", at=NOW + timedelta(minutes=20), starts="20")
     assert third["tier"] == "T2" and buttons(ops.messages[-1])
     ops.click(third["id"], "approve", NOW + timedelta(minutes=30))
     assert len(ops.patched) == 3 and ops.states()[-1] == ("resume_collector", "T2", "executed")
@@ -730,6 +736,181 @@ def test_entrance_errors_use_the_web_checklist(tmp_path):
     # 입구 502 · 503 = 웹이 응답하지 못한다. 원인 찾기는 웹 5xx와 같다: DB → 웹 파드 → 최근 배포
     db = str(tmp_path / "opsai.db")
     row = Ops(db, fake_kube(cluster(deployed="2026-10-21T13:50:00Z")), Prom()).alert("EntranceErrorsHigh")
-    assert (row["severity"], row["cause"], row["action"], row["tier"]) == ("critical", "recent_deploy", "rollback_web", "T1")
+    assert (row["severity"], row["cause"], row["action"]) == ("critical", "recent_deploy", "rollback_web")
     row = Ops(db, fake_kube(cluster(web_ready=False, web_waiting="CrashLoopBackOff")), Prom()).alert("EntranceErrorsHigh")
     assert (row["cause"], row["action"]) == ("web_down", None)
+
+
+# --- 보안 점검 1회차: 승인 · 타이머는 기록 번호만 가리킨다 → 실행 직전에 다시 본다 ---
+
+WEB = f"/apis/apps/v1{NS}/deployments/web"
+RECENT = "2026-10-21T13:50:00Z"
+
+
+def test_reject_landing_after_the_timer_read_the_row_stops_it(tmp_path, monkeypatch):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), Prom())
+    ops.alert("DataStale")
+    claim = actions._claim
+
+    def rejected_first(conn, record_id):
+        monkeypatch.setattr(actions, "_claim", claim)
+        ops.decide(record_id, False, NOW + timedelta(minutes=5))
+        return claim(conn, record_id)
+    monkeypatch.setattr(actions, "_claim", rejected_first)
+    ops.tick(NOW + timedelta(minutes=5))
+    assert ops.patched == []
+    assert ops.states() == [("resume_collector", "T1", "rejected")]
+
+
+def test_reject_during_a_run_is_told_it_came_too_late(tmp_path):
+    class Pressing(Prom):
+        def __call__(self, q):
+            if "histogram_quantile" in q and not ops.responses:
+                ops.click(1, "reject", NOW + timedelta(minutes=5))
+            return super().__call__(q)
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), Pressing())
+    ops.alert("DataStale")
+    ops.tick(NOW + timedelta(minutes=5))
+    assert len(ops.patched) == 1 and ops.states() == [("resume_collector", "T1", "executed")]
+    assert "이미 끝난 조치" in ops.responses[0][1]["text"] and "실행 중" in ops.responses[0][1]["text"]
+
+
+def test_rollback_is_skipped_when_the_revision_moved_after_diagnosis(tmp_path):
+    state = cluster(deployed=RECENT)
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(state), Prom())
+    ops.alert("WebErrorRateHigh")
+    state[WEB]["metadata"]["annotations"]["deployment.kubernetes.io/revision"] = "6"
+    ops.tick(NOW + timedelta(minutes=5))
+    assert ops.patched == [] and ops.states() == [("rollback_web", "T1", "skipped")]
+    assert "진단 뒤 판이 바뀌었다" in ops.sent[-1]
+
+
+def test_approved_rollback_is_checked_too(tmp_path):
+    state = cluster(deployed=RECENT)
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(state), Prom())
+    ops.alert("WebErrorRateHigh")
+    state[WEB]["metadata"]["annotations"]["deployment.kubernetes.io/revision"] = "6"
+    ops.decide(1, True, NOW + timedelta(minutes=1))
+    assert ops.patched == [] and ops.states() == [("rollback_web", "T1", "skipped")]
+
+
+def test_timer_does_not_act_on_an_alert_that_cleared(tmp_path):
+    prom = Prom()
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), prom)
+    ops.alert("DataStale")
+    prom.alert = None
+    ops.tick(NOW + timedelta(minutes=5))
+    assert ops.patched == [] and ops.states() == [("resume_collector", "T1", "skipped")]
+    assert "경보가 풀렸다" in ops.sent[-1]
+
+
+def test_a_person_can_still_approve_after_the_alert_cleared(tmp_path):
+    prom = Prom()
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), prom)
+    ops.alert("DataStale")
+    prom.alert = None
+    ops.decide(1, True, NOW + timedelta(minutes=1))
+    assert len(ops.patched) == 1
+
+
+def test_old_waiting_action_is_not_run(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), Prom())
+    ops.alert("DataStale")
+    ops.decide(1, True, NOW + timedelta(hours=1, seconds=1))   # 파드가 오래 멈췄다 돌아온 tick도 같다
+    assert ops.patched == [] and ops.states() == [("resume_collector", "T1", "skipped")]
+
+
+def test_state_it_cannot_read_is_not_acted_on(tmp_path):
+    state = cluster(deployed=RECENT)
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(state), Prom())
+    ops.alert("WebErrorRateHigh")
+    del state[WEB]
+    ops.tick(NOW + timedelta(minutes=5))
+    assert ops.patched == [] and ops.states() == [("rollback_web", "T1", "skipped")]
+    assert "다시 확인 못 함" in ops.sent[-1]
+
+
+def test_failed_report_raises_t1_to_t2(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), Prom())
+    ops.hands = ops.hands._replace(slack=lambda message: False)
+    assert ops.alert("DataStale")["tier"] == "T2"
+    ops.tick(NOW + timedelta(minutes=5))
+    assert ops.patched == []
+
+
+def test_timer_starts_only_after_the_report_went_out(tmp_path):
+    def down(message):
+        raise OSError("slack")
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), Prom())
+    ops.hands = ops.hands._replace(slack=down)
+    with pytest.raises(OSError):
+        ops.alert("DataStale")
+    ops.hands = ops.hands._replace(slack=ops._slack)
+    ops.tick(NOW + timedelta(minutes=5))
+    assert ops.patched == []
+
+
+def test_a_click_that_failed_says_the_timer_is_still_running(tmp_path, monkeypatch):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), Prom())
+    ops.alert("DataStale")
+
+    def locked(*args, **kw):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(actions, "decide", locked)
+    ops.click(1, "reject", NOW + timedelta(minutes=1))
+    assert "처리하지 못했다" in ops.responses[0][1]["text"]
+
+
+def test_repeat_of_one_alert_never_runs_on_the_timer(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)), Prom())
+    ops.alert("DataStale")
+    ops.tick(NOW + timedelta(minutes=5))
+    assert ops.alert("DataStale", NOW + timedelta(minutes=30))["tier"] == "T2"
+    assert "같은 경보를 다시 받았다" in ops.sent[-1]
+
+
+def test_rejecting_an_action_holds_it_for_an_hour_across_alerts(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(deployed=RECENT)), Prom())
+    ops.alert("WebErrorRateHigh")
+    ops.decide(1, False, NOW + timedelta(minutes=1))
+    assert ops.alert("WebLatencyP95High", NOW + timedelta(minutes=2), starts="b")["tier"] == "T2"
+    assert "거부한 조치" in ops.sent[-1]
+
+
+def test_rejection_stops_counting_after_an_hour(tmp_path):
+    kube = fake_kube(cluster(deployed="2026-10-21T14:50:00Z"))
+    ops = Ops(str(tmp_path / "opsai.db"), kube, Prom())
+    ops.alert("WebErrorRateHigh")
+    ops.decide(1, False, NOW + timedelta(minutes=1))
+    later = NOW + timedelta(hours=1, minutes=2)
+    assert ops.alert("WebLatencyP95High", later, starts="b")["tier"] == "T1"
+
+
+def test_entrance_errors_ask_before_a_rollback(tmp_path):
+    # 입구 숫자에는 공개 확인 경로의 503도 섞인다 → 원인은 그대로 말하되 타이머로 되돌리지 않는다
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(deployed=RECENT)), Prom())
+    row = ops.alert("EntranceErrorsHigh")
+    assert (row["cause"], row["action"], row["tier"]) == ("recent_deploy", "rollback_web", "T2")
+    assert "입구 오류" in ops.sent[-1]
+
+
+@pytest.mark.parametrize("alertname", ["WebLatencyP95High", "WebErrorRateHigh"])
+def test_a_surge_outranks_a_recent_deploy(alertname):
+    record, _ = run(alertname, fake_kube(cluster(deployed=RECENT)), Prom(rps=(6.0, 0.4)))
+    assert (record["cause"], record["action"]) == ("traffic_surge", None)
+
+
+def test_a_surge_does_not_hide_a_dead_database():
+    record, _ = run("WebLatencyP95High", fake_kube(cluster(db_ready=False)), Prom(rps=(6.0, 0.4)))
+    assert record["cause"] == "db_down"
+
+
+def test_oversized_alert_body_is_refused():
+    assert client.post("/alerts", content=b" " * 1_000_001).status_code == 413
+
+
+def test_one_post_diagnoses_a_bounded_number_of_alerts(monkeypatch):
+    seen = []
+    monkeypatch.setattr("banjjak.opsai._handle", lambda alert, now: seen.append(alert))
+    client.post("/alerts", json={"alerts": [firing("DataStale")] * 50})
+    assert len(seen) == 20

@@ -3,6 +3,8 @@ import json
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from banjjak.chaos import App, connect, inject, run_once
 
 NOW = datetime(2026, 10, 24, 3, 0, tzinfo=timezone.utc)
@@ -235,3 +237,22 @@ def test_gap_and_chance_come_from_the_environment(tmp_path, monkeypatch):
         monkeypatch.delenv("CHAOS_GAP_HOURS", raising=False)
         monkeypatch.delenv("CHAOS_CHANCE", raising=False)
         importlib.reload(chaos_module)   # 다른 시험은 원래 값으로
+
+
+def test_answer_is_written_before_the_fault_goes_in(tmp_path):
+    # 응답을 못 받은 넣기도 들어갔을 수 있다. 되돌리기는 기록만 보고 움직이므로 기록이 먼저다
+    chaos = Chaos(tmp_path)
+    good = chaos.cluster.app.patch
+
+    def lost(path, body, ctype):
+        good(path, body, ctype)
+        raise TimeoutError("response lost")
+    chaos.cluster.app = chaos.cluster.app._replace(patch=lost)
+    with pytest.raises(TimeoutError):
+        chaos.inject("latency")
+    row = chaos.answers()[0]
+    assert (row["kind"], row["state"], json.loads(row["params"])) == ("latency", "active", {"unsure": True})
+    chaos.cluster.app = chaos.cluster.app._replace(patch=good)
+    chaos.run(NOW + timedelta(minutes=10), switch="off")
+    assert chaos.cluster.calls[-1] == ("patch", FAULT_CM, {"data": {"fault.json": "{}"}})
+    assert chaos.answers()[0]["state"] == "ended"

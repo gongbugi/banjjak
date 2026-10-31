@@ -155,12 +155,13 @@ def _surge(prom, reqs=REQS):
     return {"surge": now >= 1 and now >= 3 * before}, f"{now:.2f} / {before:.2f} req/s"
 
 
-def _latency(evidence, kube, prom, now):
+def _web_traffic(evidence, kube, prom, now):
+    """공개 요청에 움직이는 웹 경보. 급증이 보이면 배포 나이만으로 되돌리지 않는다: 부하가 멀쩡한 배포를 롤백하면 안 된다."""
     cause = _web(evidence, kube, now)
     traffic = _see(evidence, "요청량 (지금 / 1시간 전)", lambda: _surge(prom))
-    if cause:
-        return cause
-    return "traffic_surge" if traffic and traffic["surge"] else None
+    if cause in (None, "recent_deploy") and traffic and traffic["surge"]:
+        return "traffic_surge"
+    return cause
 
 
 def _rejected(evidence, kube, prom, now):
@@ -227,8 +228,8 @@ def _batch(evidence, kube, now, cronjob, label):
 
 CHECKLISTS = {
     "DataStale": lambda ev, kube, prom, now: _batch(ev, kube, now, "collector", "수집기"),
-    "WebErrorRateHigh": lambda ev, kube, prom, now: _web(ev, kube, now),
-    "WebLatencyP95High": _latency,
+    "WebErrorRateHigh": _web_traffic,
+    "WebLatencyP95High": _web_traffic,
     "DataAgeMissing": _data_age_missing,
     "AnalysisSuccessLow": lambda ev, kube, prom, now: _batch(ev, kube, now, "analyzer", "분석기"),
     # #11 입구 경보: 거절(429)은 급증인지 보고, 입구 502 · 503(웹이 응답 못 함)은 웹 5xx와 같은 순서로 뿌리를 찾는다
