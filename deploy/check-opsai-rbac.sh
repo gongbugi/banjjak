@@ -34,7 +34,7 @@ if [ "$mode" = execute ]; then
   web=/spec/template/spec
   own=$(kubectl --context "$ctx" -n banjjak get deploy web -o jsonpath='{.spec.template.spec.containers[0].image}')
   admit yes deployment/web "[{\"op\":\"replace\",\"path\":\"$web/containers/0/image\",\"value\":\"${own%:*}:other\"}]"
-  admit yes deployment/web "[{\"op\":\"add\",\"path\":\"$web/containers/0/env/-\",\"value\":{\"name\":\"PLAIN\",\"value\":\"1\"}}]"
+  admit no deployment/web "[{\"op\":\"add\",\"path\":\"$web/containers/0/env/-\",\"value\":{\"name\":\"PGHOSTADDR\",\"value\":\"10.0.0.9\"}}]"
   admit no deployment/web "[{\"op\":\"replace\",\"path\":\"$web/containers/0/image\",\"value\":\"evil.example/banjjak:1\"}]"
   admit no deployment/web "[{\"op\":\"replace\",\"path\":\"$web/initContainers/0/image\",\"value\":\"busybox:1\"}]"
   admit no deployment/web "[{\"op\":\"add\",\"path\":\"$web/containers/0/command\",\"value\":[\"sh\",\"-c\",\"true\"]}]"
