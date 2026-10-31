@@ -23,6 +23,10 @@ from banjjak.trending import trending
 # "proprietary" · 목차 링크)을 걸렀다
 # code-v2 → code-v3 (2026-10-21): v2에서 더한 "patched"가 보안과 무관한 문장 3개를 잡아 뺐다
 METHOD = "code-v3"
+# 카드 AI (banjjak.cardai). 프롬프트를 고치면 올린다
+# ai-v1 → ai-v2 (2026-10-31, 운영 전): 평가에서 관문 통과가 17/35였다. 후보 문장을 번호 대신 종류 이름으로 고르고,
+# 근거 대조는 마크다운 표시를 뺀 글자로, 요약은 더 짧게 부른다. 분야 프롬프트는 그대로다 (정답지를 보고 고치지 않는다)
+AI_METHOD = "ai-v2"
 RANKED = 50                      # 화면에 보이는 순위만 분석한다
 RECHECK = timedelta(days=1)      # README가 바뀌었나는 하루 한 번까지만 본다
 MAX_README = 300_000             # 아주 긴 README는 앞부분만 저장 · 분석한다
@@ -266,6 +270,9 @@ def main():
         n, failed = analyze_once(github_readme(os.environ["GITHUB_TOKEN"]), conn, datetime.now(timezone.utc))
     print(f"analyzed {n}, failed {failed}")
     ping(os.environ.get("HEARTBEAT_URL"))   # "돌았다"는 신호. 레포별 실패는 성공률 규칙이 본다
+    if os.environ.get("ANTHROPIC_API_KEY"):  # 없으면 코드판 카드만. 코드판과 신호가 끝난 뒤라 AI가 멈춰도 분석기 장애가 아니다
+        from banjjak import cardai           # cardai가 이 모듈을 불러온다
+        cardai.main()
 
 
 if __name__ == "__main__":

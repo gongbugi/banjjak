@@ -1,7 +1,7 @@
 import os
 from functools import lru_cache
 
-from sqlalchemy import BigInteger, Boolean, Column, ForeignKey, Identity, Integer, MetaData, Table, Text, create_engine
+from sqlalchemy import BigInteger, Boolean, Column, Float, ForeignKey, Identity, Integer, MetaData, Table, Text, create_engine
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP
 
 metadata = MetaData()
@@ -57,10 +57,15 @@ analyses = Table(
     Column("category", Text),
     Column("usage", Text),
     Column("notes", JSONB, nullable=False, server_default="[]"),
+    Column("summary", Text),                                          # 여기부터 카드 AI 행만 (#19)
+    Column("evidence", JSONB),
+    Column("tokens", Integer),
+    Column("cost", Float),
 )
 
 
 @lru_cache
 def engine():
     # pool_pre_ping: DB가 잠깐 끊겼다 돌아와도 죽은 연결을 쓰지 않는다 (커넥션 고착 방지)
-    return create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
+    # hide_parameters: 오류 메시지에 README · AI 글이 실려 Job 로그로 가지 않게 (운영 AI가 그 로그를 읽는다)
+    return create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True, hide_parameters=True)

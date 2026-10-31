@@ -32,7 +32,8 @@ DEADLINE = 90          # 진단 1건 (초)
 # 100만 토큰당 (입력, 5분 캐시 쓰기, 캐시 읽기, 출력). 공식 가격표 2026-10-30
 PRICES = {"claude-sonnet-5-5": (2.0, 2.5, 0.10, 10.0), "claude-haiku-5-5": (0.10, 0.125, 0.01, 0.50)}
 # ponytail: kind = 경보 종류 하나가 시간당 쓸 수 있는 진단 수. 한 종류가 하루 내내 울리면 하루 상한은 쓸 수 있다 (그날 LLM만 꺼지고 점검표는 돈다)
-CAPS = {"live": {"day": 1.0, "total": 3.0, "hour": 6, "kind": 2}, "replay": {"total": 8.0}}
+CAPS = {"live": {"day": 1.0, "total": 3.0, "hour": 6, "kind": 2}, "replay": {"total": 4.0},
+        "card": {"day": 0.3, "total": 4.0}}   # card는 Postgres가 장부다 (banjjak.cardai)
 
 # 장애 스위치의 이름들. 테이프의 자유 글에 있으면 그 건은 LLM에 보내지 않는다. delay는 흔한 말이라 넣지 않는다
 FORBIDDEN = ("FAULT", "web-fault", "fault.json", "error_rate")
@@ -227,9 +228,14 @@ def _log(conn, now, ledger, kind, note=None, model=None, tokens=(None, None, Non
             TOKENS.labels(name, model).inc(count)
 
 
-def _charge(conn, now, ledger, model, usage):
+def cost_of(model, usage):
     tokens = (usage.input_tokens, usage.cache_creation_input_tokens or 0, usage.cache_read_input_tokens or 0, usage.output_tokens)
-    _log(conn, now, ledger, "call", None, model, tokens, sum(n * p for n, p in zip(tokens, PRICES[model])) / 1_000_000)
+    return tokens, sum(n * p for n, p in zip(tokens, PRICES[model])) / 1_000_000
+
+
+def _charge(conn, now, ledger, model, usage):
+    tokens, cost = cost_of(model, usage)
+    _log(conn, now, ledger, "call", None, model, tokens, cost)
 
 
 def spent(conn, ledger, since=0.0):

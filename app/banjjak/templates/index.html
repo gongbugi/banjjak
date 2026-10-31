@@ -167,6 +167,7 @@
 <a class="name" href="{{ r.url }}">{{ r.full_name }}</a>
 {% if view %}<span class="gain">{{ r.days }}일 <b>{{ "{:+,}".format(r.gained) }}</b></span>{% else %}<span class="gain">하루 <b>{{ "{:+,.1f}".format(r.stars_per_day) }}</b>{% if r.estimated %} <span class="est">(첫 기록이라 생성 후 평균)</span>{% elif r.observed_hours < 23 %} <span class="est">({{ r.observed_hours }}시간 관측)</span>{% endif %}</span>{% endif %}
 </div>
+{% if r.card and r.card.summary %}<p class="desc"><span class="tag">AI 요약</span>{{ r.card.summary }}</p>{% endif %}
 {% if r.description %}<p class="desc">{{ r.description }}</p>{% endif %}
 <p class="facts">
 {% if r.card %}<span class="field">{{ r.card.category_name }}</span>{% endif %}

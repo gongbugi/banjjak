@@ -19,7 +19,7 @@ from sqlalchemy import text
 
 from banjjak import db
 from banjjak.analyze import CATEGORY_NAMES
-from banjjak.cards import KST, attach_cards, success_ratio, weekly_tally
+from banjjak.cards import KST, ai_usage, attach_cards, success_ratio, weekly_tally
 from banjjak.probe import USER_AGENT as PROBE_AGENT
 from banjjak.rising import rising
 from banjjak.trending import latest_capture, trending
@@ -115,6 +115,18 @@ REGISTRY.register(_DbGauge("banjjak_data_age_seconds", "now minus the latest sta
 # #4 규칙 AnalysisSuccessLow가 이 이름을 본다 (95% 미만이 15분)
 REGISTRY.register(_DbGauge("banjjak_analysis_success_ratio", "share of successful analyses in the last 24h",
                            lambda: _db_value(lambda conn: success_ratio(conn, _now()))))
+
+
+def _ai_usage(key):
+    used = _db_value(lambda conn: ai_usage(conn, _now()))
+    return used and used[key]
+
+
+# 카드 AI (#19). 실패는 코드판 카드로 넘어가므로 분석 성공률(SLI)과 따로 잰다
+for key, about in {"ok": "card AI calls that passed the gates in the last 24h", "failed": "card AI calls that failed in the last 24h",
+                   "tokens": "card AI tokens in the last 24h", "cost_day_dollars": "card AI spend in the last 24h",
+                   "cost_dollars": "card AI spend in total"}.items():
+    REGISTRY.register(_DbGauge(f"banjjak_card_ai_{key}", about, lambda key=key: _ai_usage(key)))
 
 
 @app.get("/freshness")

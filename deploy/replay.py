@@ -1,4 +1,4 @@
-"""재생 (#20): 시험장 테이프를 LLM 진단기로 다시 돌려 정답 · 점검표와 나란히 본다. 돈이 든다 (장부 replay, 상한 $8은 llm.judge가 막는다).
+"""재생 (#20): 시험장 테이프를 LLM 진단기로 다시 돌려 정답 · 점검표와 나란히 본다. 돈이 든다 (장부 replay, 상한 $4는 llm.judge가 막는다).
 
 사용 (레포 루트, 키는 deploy/replay.ps1이 넣는다): powershell -ExecutionPolicy Bypass -File .\\deploy\\replay.ps1 [--model M] [--effort E] [--thinking between_tools] [--times N] [--compare]
 읽는 것: drill-out/opsai-drill.db (테이프) · drill-out/answers.jsonl (정답). Azure 테이프에는 정답이 들어 있어 #12 전에는 돌리지 않는다

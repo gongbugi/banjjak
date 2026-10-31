@@ -5,27 +5,34 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import distinct_on
 
 from banjjak import db
-from banjjak.analyze import CATEGORY_NAMES, METHOD, NOTE_NAMES
+from banjjak.analyze import AI_METHOD, CATEGORY_NAMES, METHOD, NOTE_NAMES
 
 KST = timezone(timedelta(hours=9))   # 한국은 서머타임이 없어 고정 오프셋으로 충분하다
 RELATED = 3
 
 
-def _latest_ok(conn, repo_ids):
+def latest_ok(conn, repo_ids, method=METHOD):
     a = db.analyses
-    rows = conn.execute(select(a).where(a.c.repo_id.in_(repo_ids), a.c.method == METHOD, a.c.ok)
+    rows = conn.execute(select(a).where(a.c.repo_id.in_(repo_ids), a.c.method == method, a.c.ok)
                         .order_by(a.c.repo_id, a.c.analyzed_at.desc()).ext(distinct_on(a.c.repo_id))).mappings()
     return {r["repo_id"]: r for r in rows}
 
 
+def _shown(conn, repo_ids):
+    """화면에 낼 행: 코드판의 최신 README를 AI판이 통과해 있으면 AI판, 아니면 코드판."""
+    ai = latest_ok(conn, repo_ids, AI_METHOD)
+    return {k: ai[k] if k in ai and ai[k]["readme_sha"] == r["readme_sha"] else r for k, r in latest_ok(conn, repo_ids).items()}
+
+
 def attach_cards(conn, items):
     """순위 항목마다 card(없으면 None)와 같은 분야의 다른 순위 레포(related)를 붙인다."""
-    latest = _latest_ok(conn, [i["id"] for i in items])
+    latest = _shown(conn, [i["id"] for i in items])
     for i in items:
         r = latest.get(i["id"])
         i["card"] = None if r is None else {
             "category": r["category"], "category_name": CATEGORY_NAMES[r["category"]], "usage": r["usage"],
             "notes": [{"kind": n["kind"], "name": NOTE_NAMES[n["kind"]], "quote": n["quote"]} for n in r["notes"]],
+            "summary": r["summary"],
         }
     for i in items:
         cat = i["card"] and i["card"]["category"]
@@ -47,7 +54,7 @@ def weekly_tally(conn, now):
     last_start = this_start - timedelta(days=7)
     first = select(a.c.repo_id, func.min(a.c.analyzed_at).label("first")).where(a.c.method == METHOD) \
         .group_by(a.c.repo_id).subquery()
-    latest = _latest_ok(conn, select(first.c.repo_id).where(first.c.first >= last_start))
+    latest = _shown(conn, select(first.c.repo_id).where(first.c.first >= last_start))
     firsts = dict(conn.execute(select(first.c.repo_id, first.c.first).where(first.c.first >= last_start)).all())
     counts = {}   # 분야 → [이번 주, 지난주]
     for repo_id, r in latest.items():
@@ -64,3 +71,14 @@ def success_ratio(conn, now):
     ok, total = conn.execute(select(func.count().filter(a.c.ok), func.count())
                              .where(a.c.method == METHOD, a.c.analyzed_at > now - timedelta(hours=24))).one()
     return ok / total if total else None
+
+
+def ai_usage(conn, now):
+    """카드 AI의 최근 24시간 호출 · 토큰과 비용. 상한과 지표가 함께 본다 (키는 지표 이름). 분석기는 금방 끝나서 DB가 장부다."""
+    a = db.analyses
+    day = a.c.analyzed_at > now - timedelta(hours=24)
+    ok, failed, tokens, cost_day, cost = conn.execute(
+        select(func.count().filter(day, a.c.ok), func.count().filter(day, ~a.c.ok), func.coalesce(func.sum(a.c.tokens).filter(day), 0),
+               func.coalesce(func.sum(a.c.cost).filter(day), 0), func.coalesce(func.sum(a.c.cost), 0))
+        .where(a.c.method == AI_METHOD)).one()
+    return {"ok": ok, "failed": failed, "tokens": tokens, "cost_day_dollars": cost_day, "cost_dollars": cost}
