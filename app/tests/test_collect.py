@@ -60,8 +60,24 @@ def test_trending_ranks_by_stars_gained_per_day():
 
     assert [(r["full_name"], r["stars_per_day"], r["estimated"]) for r in rows] == [
         ("c/new", 100.0, True),    # 기록 1개뿐 → 생성 후 3일 동안 300개로 추정
-        ("a/fast", 96.0, False),   # 12시간에 48개 → 하루 96개
-        ("b/big", 24.0, False),    # 12시간에 12개 → 하루 24개
+        ("a/fast", 48, False),     # 12시간에 48개. 하루로 늘려 부풀리지 않는다 (실제 값은 최솟값)
+        ("b/big", 12, False),      # 12시간에 12개
+    ]
+
+
+# 2026-10-30 실측: 수집 시각이 몇 초씩 밀려 24시간 창에는 23시간 전 기록까지만 들었고, 환산(* 24 / hours)이 값을 부풀렸다
+def test_trending_counts_a_full_day_and_says_how_long_it_watched():
+    created = "2026-10-01T00:00:00Z"
+    with db.engine().begin() as conn:
+        collect_once(fake_search([[item(1, "a/old", 100, created)]]), conn, NOW - timedelta(hours=25))             # 창 밖
+        collect_once(fake_search([[item(1, "a/old", 110, created)]]), conn, NOW - timedelta(hours=24, minutes=10))  # 조금 밀린 어제
+        collect_once(fake_search([[item(1, "a/old", 150, created), item(2, "b/late", 200, created)]]), conn, NOW - timedelta(hours=5))
+        collect_once(fake_search([[item(1, "a/old", 170, created), item(2, "b/late", 230, created)]]), conn, NOW)
+        rows = trending(conn, limit=10)
+
+    assert [(r["full_name"], r["stars_per_day"], r["observed_hours"]) for r in rows] == [
+        ("a/old", 60, 24),
+        ("b/late", 30, 5),
     ]
 
 

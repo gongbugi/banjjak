@@ -1,5 +1,5 @@
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -81,8 +81,31 @@ def test_index_page_shows_ranked_repos():
     assert "2026년 10월 21일 21:00 기준 (한국 시간)" in r.text   # 수집 시각 12:00 UTC
 
 
+def _collect(hours_ago, *repos):
+    items = [{"id": id, "full_name": name, "html_url": f"https://github.com/{name}", "description": None, "language": None,
+              "stargazers_count": stars, "created_at": "2026-10-17T12:00:00Z"} for id, name, stars in repos]
+    with db.engine().begin() as conn:
+        collect_once(lambda q, p: {"items": items if p == 1 else []}, conn,
+                     datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc) - timedelta(hours=hours_ago))
+
+
+def test_a_repo_losing_stars_does_not_break_the_page():
+    # 음수의 제곱근은 복소수라 round가 터진다 → 레포 하나가 별을 잃으면 화면 전체가 500이었다
+    _collect(5, (1, "a/up", 100), (2, "b/down", 100))
+    _collect(0, (1, "a/up", 150), (2, "b/down", 97))
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "<b>-3" in r.text and "<b>+50" in r.text
+
+
+def test_page_says_when_it_watched_less_than_a_day():
+    _collect(5, (1, "a/up", 100))
+    _collect(0, (1, "a/up", 150))
+    assert "5시간 관측" in client.get("/").text
+
+
 def test_no_write_routes():
-    writes = [r.path for r in app.routes if set(getattr(r, "methods", ())) & {"POST", "PUT", "PATCH", "DELETE"}]
+    writes =[r.path for r in app.routes if set(getattr(r, "methods", ())) & {"POST", "PUT", "PATCH", "DELETE"}]
     assert writes == []
 
 
@@ -138,7 +161,7 @@ def test_user_pages_are_reused_for_a_minute(monkeypatch):
     _seed()
     api, page = client.get("/api/trending"), client.get("/")
     with db.engine().begin() as conn:
-        conn.execute(text("TRUNCATE analyses, readmes, star_snapshots, repos"))   # DB가 바뀌어도
+        conn.execute(text("TRUNCATE analyses, readmes, star_daily, star_snapshots, repos"))   # DB가 바뀌어도
     clock.t += 59
     again_api, again_page = client.get("/api/trending"), client.get("/")
     assert again_api.json() == api.json() and again_page.text == page.text   # 1분 안에는 같은 화면

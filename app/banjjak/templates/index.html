@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% if field_name %}{{ field_name }} | {% endif %}반짝 | 지금 뜨는 GitHub 레포</title>
+  <title>{% if view %}지금 뜨는 레포 | {% elif field_name %}{{ field_name }} | {% endif %}반짝 | 지금 뜨는 GitHub 레포</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;600&display=swap" rel="stylesheet">
@@ -129,14 +129,23 @@
     </div>
     <div class="about">
       <p class="basis">{{ basis or "아직 수집 전이에요" }}</p>
-      <p class="note">최근 30일 안에 생긴 레포 중 별이 빨리 느는 순서예요. 오래된 레포가 갑자기 뜨는 경우는 아직 보지 않아요.</p>
+      {% if view %}
+      <p class="note">별 2만 이상인 레포와 최근 120일 안에 생겨 별 1천을 넘긴 레포를 하루 한 번 재서, 7일 동안 별이 많이 는 순서예요. 7일이 쌓이기 전에는 쌓인 날만큼 보여 줘요.</p>
+      {% else %}
+      <p class="note">최근 30일 안에 생긴 레포 중 별이 빨리 느는 순서예요. 오래된 레포는 지금 뜨는 레포 탭에서 봐요.</p>
+      {% endif %}
     </div>
   </header>
+
+  <nav class="fields" aria-label="순위 종류">
+    <a href="/"{% if not view %} aria-current="page"{% endif %}>새로 생긴 레포</a>
+    <a href="/?view=rising"{% if view %} aria-current="page"{% endif %}>지금 뜨는 레포</a>
+  </nav>
 
   <div class="columns">
   <section class="ranking" aria-labelledby="rank-title">
     <div class="title">
-      <h2 id="rank-title">하루 별 증가 순위</h2>
+      <h2 id="rank-title">{{ "7일 별 증가 순위" if view else "하루 별 증가 순위" }}</h2>
       <p class="count">{% if field_name %}{{ field_name }} {{ items | length }}개{% else %}레포 {{ total }}개{% endif %}</p>
     </div>
     {% if fields %}
@@ -156,7 +165,7 @@
 <div>
 <div class="head">
 <a class="name" href="{{ r.url }}">{{ r.full_name }}</a>
-<span class="gain">하루 <b>+{{ "{:,.1f}".format(r.stars_per_day) }}</b>{% if r.estimated %} <span class="est">(첫 기록이라 생성 후 평균)</span>{% endif %}</span>
+{% if view %}<span class="gain">{{ r.days }}일 <b>{{ "{:+,}".format(r.gained) }}</b></span>{% else %}<span class="gain">하루 <b>{{ "{:+,.1f}".format(r.stars_per_day) }}</b>{% if r.estimated %} <span class="est">(첫 기록이라 생성 후 평균)</span>{% elif r.observed_hours < 23 %} <span class="est">({{ r.observed_hours }}시간 관측)</span>{% endif %}</span>{% endif %}
 </div>
 {% if r.description %}<p class="desc">{{ r.description }}</p>{% endif %}
 <p class="facts">
@@ -184,7 +193,9 @@
 </div>
 </li>
     {% else %}
-      {% if field %}
+      {% if view %}
+      <li class="empty">기록을 쌓는 중이에요. 하루 한 번 재서 둘째 날부터 보여요.</li>
+      {% elif field %}
       <li class="empty">지금 순위에 이 분야 레포가 없어요. <a href="/">전체 보기</a></li>
       {% else %}
       <li class="empty">아직 수집된 레포가 없어요. 수집기는 매시 정각에 돌아요.</li>
@@ -193,6 +204,7 @@
     </ol>
   </section>
 
+  {% if not view %}
   <aside class="week" aria-labelledby="week-title">
     <h2 id="week-title">이번 주 순위에 새로 든 레포</h2>
     {% set has_last = week | selectattr("last_week") | list | length > 0 %}
@@ -218,6 +230,7 @@
     <p class="note">이번 주 분석이 아직 없어요. 분석기는 매시 20분에 돌아요.</p>
     {% endif %}
   </aside>
+  {% endif %}
   </div>
 
   <footer>

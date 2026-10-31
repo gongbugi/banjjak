@@ -1,0 +1,36 @@
+# 지금 뜨는 레포 탭: 하루 한 번 별을 기록한다. 수집기(0분) · 분석기(20분)와 시각을 나눈다 (GitHub 검색 분당 30회를 같이 쓴다)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rising
+spec:
+  schedule: "40 0 * * *"
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+          containers:
+            - name: rising
+              image: banjjak
+              imagePullPolicy: IfNotPresent
+              command: ["python", "-m", "banjjak.rising"]
+              env:
+                - name: DATABASE_URL
+                  valueFrom: {secretKeyRef: {name: db, key: url}}
+                - name: GITHUB_TOKEN
+                  valueFrom: {secretKeyRef: {name: github-token, key: token}}
+              resources:
+                requests: {cpu: 50m, memory: 96Mi}
+                limits: {memory: 256Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true

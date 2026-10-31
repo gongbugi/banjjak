@@ -31,5 +31,5 @@ def _schema():
 @pytest.fixture(autouse=True)
 def _clean():
     with db.engine().begin() as conn:
-        conn.execute(text("TRUNCATE analyses, readmes, star_snapshots, repos"))
+        conn.execute(text("TRUNCATE analyses, readmes, star_daily, star_snapshots, repos"))
     main._cache.clear()   # 앞 테스트의 화면이 남지 않게 (응답 캐시 60초)

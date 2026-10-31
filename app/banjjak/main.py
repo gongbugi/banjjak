@@ -21,6 +21,7 @@ from banjjak import db
 from banjjak.analyze import CATEGORY_NAMES
 from banjjak.cards import KST, attach_cards, success_ratio, weekly_tally
 from banjjak.probe import USER_AGENT as PROBE_AGENT
+from banjjak.rising import rising
 from banjjak.trending import latest_capture, trending
 
 # 지표는 이 앱에 없다. banjjak.serve가 9100 포트로 따로 낸다 (공개 입구로 새지 않게)
@@ -184,20 +185,39 @@ def api_trending():
 
 
 @app.get("/", dependencies=[Depends(_fault)])
-def index(request: Request, field: str | None = None):
+def index(request: Request, field: str | None = None, view: str | None = None):
+    if view == "rising":   # 보기도 정해진 값만 받는다
+        return HTMLResponse(_cached("rising", lambda: _rising_body(request)))
     # 분야는 정해진 목록에서만 받는다. 모르는 값은 전체로 → 캐시 칸도 아는 분야만큼만 생긴다
     field = field if field in CATEGORY_NAMES else None
     return HTMLResponse(_cached(f"index:{field}" if field else "index", lambda: _index_body(request, field)))
 
 
+def _basis_text(at):
+    at = at.astimezone(KST) if at else None
+    return f"{at.year}년 {at.month}월 {at.day}일 {at:%H:%M} 기준 (한국 시간)" if at else None
+
+
+def _shine(items, key):
+    # 반짝임 크기: 별 증가를 1위 대비 제곱근으로 (작은 차이도 보이게). 분야로 걸러도 전체 1위 기준
+    top = max((i[key] for i in items), default=0)
+    for i in items:
+        i["glow"] = round(0.35 + 0.65 * (max(i[key], 0) / top) ** 0.5, 2) if top > 0 else 0.35
+
+
+def _rising_body(request):
+    with db.engine().connect() as conn:
+        updated, items = rising(conn)
+    _shine(items, "gained")
+    return templates.TemplateResponse(request, "index.html", {
+        "basis": _basis_text(updated), "items": items, "total": len(items), "fields": [],
+        "field": None, "field_name": None, "week": [], "view": "rising"}).body
+
+
 def _index_body(request, field):
     updated_at, items, week = _snapshot()
-    basis = datetime.fromisoformat(updated_at).astimezone(KST) if updated_at else None
-    basis_text = f"{basis.year}년 {basis.month}월 {basis.day}일 {basis:%H:%M} 기준 (한국 시간)" if basis else None
-    # 반짝임 크기: 하루 별 증가를 1위 대비 제곱근으로 (작은 차이도 보이게). 분야로 걸러도 전체 1위 기준
-    top = max((i["stars_per_day"] for i in items), default=0)
-    for i in items:
-        i["glow"] = round(0.35 + 0.65 * (i["stars_per_day"] / top) ** 0.5, 2) if top > 0 else 0.35
+    basis_text = _basis_text(datetime.fromisoformat(updated_at) if updated_at else None)
+    _shine(items, "stars_per_day")
     counts = Counter(i["card"]["category"] for i in items if i["card"])
     fields = [{"slug": s, "name": CATEGORY_NAMES[s], "count": n}   # 많은 순, 미분류는 분야가 아니라 맨 뒤
               for s, n in sorted(counts.items(), key=lambda c: (c[0] == "unclassified", -c[1], CATEGORY_NAMES[c[0]]))]
