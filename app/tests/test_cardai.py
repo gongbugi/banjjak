@@ -115,7 +115,7 @@ def test_rising_tab_repos_get_the_same_cards():
         save(conn, {2: old}, NOW - timedelta(days=2))
         save(conn, {2: {**old, "stargazers_count": 30_900}}, NOW)
         analyze_once(lambda name: {"sha": "s2", "content": ROCKET}, conn, NOW)
-    assert cardai.enrich_once(Fake(good(), good()), NOW) == (2, 0)     # 새로 생긴 레포 순위가 먼저, 지금 뜨는 레포가 뒤
+    assert cardai.enrich_once(Fake(good(), good()), NOW) == (2, 0)     # 새로 생긴 레포 순위가 먼저, 전체 레포가 뒤
     main._cache.clear()
     page = client.get("/?view=rising").text
     assert page.index("작은 서비스를 설정 파일") < page.index("<details>") < page.index("x/old desc")

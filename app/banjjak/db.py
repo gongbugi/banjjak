@@ -26,7 +26,7 @@ star_snapshots = Table(
     Column("stars", Integer, nullable=False),
 )
 
-# 하루 한 번 찍는 사진 (지금 뜨는 레포 탭). star_snapshots와 나눈다: latest_capture가 그 표의 최신 시각을 신선도로 쓴다
+# 하루 한 번 찍는 사진 (전체 레포 탭). star_snapshots와 나눈다: latest_capture가 그 표의 최신 시각을 신선도로 쓴다
 star_daily = Table(
     "star_daily", metadata,
     Column("repo_id", BigInteger, ForeignKey("repos.id", ondelete="CASCADE"), primary_key=True),

@@ -5,7 +5,7 @@ from prometheus_client import REGISTRY, generate_latest
 from sqlalchemy.dialects.postgresql import insert
 
 from banjjak import db, main
-from banjjak.analyze import METHOD, NotFound, analyze_once
+from banjjak.analyze import AI_METHOD, METHOD, NotFound, analyze_once
 from banjjak.cards import attach_entry, weekly_tally
 from banjjak.collect import collect_once
 
@@ -126,11 +126,17 @@ def test_panel_lists_todays_entrants_and_rows_show_the_day(monkeypatch):
     items = [_item(1, "o/old", [], 300), _item(2, "o/new", [], 200), _item(3, "o/art", [], 100)]
     with db.engine().begin() as conn:
         collect_once(lambda q, p: {"items": items if p == 1 else []}, conn, NOW)
-        conn.execute(insert(db.analyses), [_analysis(1, NOW - timedelta(days=3), "security"), _analysis(2, NOW - timedelta(hours=2)),
-                                           _analysis(3, NOW - timedelta(hours=2), "creative")])
+        conn.execute(insert(db.analyses), [
+            _analysis(1, NOW - timedelta(days=3), "security"), _analysis(2, NOW - timedelta(hours=2)),
+            _analysis(3, NOW - timedelta(hours=2), "creative"),
+        ])
+        conn.execute(insert(db.analyses), {**_analysis(2, NOW - timedelta(hours=1)), "method": AI_METHOD, "summary": "로켓 만드는 도구"})
     html = client.get("/").text
     panel = html.split("<aside")[1]
+    assert "오늘 새로 든 레포" in panel
     assert 'href="#r2">o/new' in panel and 'href="#r3">o/art' in panel and "o/old" not in panel
+    assert "2위 · 하루 +50 · 개발 도구" in panel and "로켓 만드는 도구" in panel   # 별 증가 · 분야 · AI 요약
+    assert "o/art desc" in panel                                  # 요약이 없으면 원문 설명
     assert '<li class="repo" id="r2"' in html                     # 목록에서 누르면 순위의 그 행으로 간다
     assert "등장 4일째" in html and "오늘 첫 등장" in html
     assert "이번 주 순위에 새로 든 레포" not in html

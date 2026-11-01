@@ -77,7 +77,7 @@ def test_index_page_shows_ranked_repos():
     r = client.get("/")
     assert r.status_code == 200
     assert "x/rocket" in r.text
-    assert "최근 30일 안에 생긴 레포" in r.text
+    assert "30일 안에 생긴 레포만" in r.text
     assert "2026년 10월 21일 21:00 기준 (한국 시간)" in r.text   # 수집 시각 12:00 UTC
 
 

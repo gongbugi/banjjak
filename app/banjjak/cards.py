@@ -64,7 +64,7 @@ def weekly_tally(conn, now):
     a = db.analyses
     this_start = week_start(now)
     last_start = this_start - timedelta(days=7)
-    # ponytail: 지금 뜨는 탭의 레포도 분석되므로, 새로 생긴 레포 순위에 들 수 있는 나이로 가른다. 지금 뜨는 탭에만 든 신생 레포도
+    # ponytail: 전체 레포 탭의 레포도 분석되므로, 새로 생긴 레포 순위에 들 수 있는 나이로 가른다. 전체 레포 탭에만 든 신생 레포도
     # 세지만 2026-11-01 실측은 그런 레포가 0개였다 (30일 이내 12개가 모두 두 탭에 겹침). 정확히 하려면 순위 이력을 남겨야 한다
     r = db.repos
     first = (select(a.c.repo_id, func.min(a.c.analyzed_at).label("first")).join(r, r.c.id == a.c.repo_id)

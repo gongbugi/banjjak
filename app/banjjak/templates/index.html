@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% if field_name %}{{ field_name }} | {% endif %}{% if view %}지금 뜨는 레포 | {% endif %}반짝 | 지금 뜨는 GitHub 레포</title>
+  <title>{% if field_name %}{{ field_name }} | {% endif %}{% if view %}전체 레포 | {% endif %}반짝 | 지금 뜨는 GitHub 레포</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;600&display=swap" rel="stylesheet">
@@ -28,7 +28,7 @@
                 display: flex; align-items: center; gap: .25em; }
     header h1 svg { width: .62em; height: .62em; fill: var(--star); }
     .lede { margin: .75rem 0 0; font-size: 1.2rem; }
-    .about { max-width: 30rem; }
+    .about { flex: 0 1 30rem; align-self: flex-start; }   /* 글 길이와 상관없이 같은 자리: 탭을 바꿔도 기준 시각이 움직이지 않게 */
     .basis { margin: 0; font-weight: 600; }
     .note { margin: .25rem 0 0; color: var(--muted); font-size: .94rem; }
 
@@ -37,6 +37,14 @@
     .fresh { flex: 1 1 18.75rem; min-width: 0; }
     .title { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .25rem 1rem; }
     .count { margin: 0; color: var(--muted); font-size: .875rem; }
+
+    /* 순위 대상 탭: 분야 칩과 모양을 달리하고, 누구를 세는지 탭 안에 쓴다 */
+    .tabs { margin-top: 1.25rem; display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; max-width: 34rem; }
+    .tabs a { padding: .55rem .8rem; border: 1px solid var(--edge); border-radius: 8px; text-decoration: none; font-weight: 600; }
+    .tabs a:hover { border-color: var(--ink); }
+    .tabs small { display: block; color: var(--muted); font-size: .8rem; font-weight: 400; }
+    .tabs a[aria-current] { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+    .tabs a[aria-current] small { color: #C9D0DF; }
 
     /* 분야별 보기: 링크라 자바스크립트 없이 걸러진다 (?field=) */
     .fields { margin-top: .9rem; display: flex; flex-wrap: wrap; gap: .5rem; }
@@ -90,13 +98,19 @@
     .related { display: flex; flex-wrap: wrap; gap: .1rem 1rem; }
     .empty { margin: 0; padding: 1.25rem 0; border-top: 1px solid var(--rule); color: var(--muted); }
 
-    /* 오늘 처음 든 레포: 순위의 그 행으로 가는 링크 목록 */
+    /* 오늘 새로 든 레포: 줄 전체가 순위의 그 행으로 가는 링크 */
     .fresh .sum { margin: .4rem 0 0; color: var(--muted); font-size: .94rem; }
     .fresh .sum b { color: var(--ink); font-family: var(--mono); }
     .fresh ul { list-style: none; margin: 1rem 0 0; padding: 0; }
-    .fresh li { display: flex; align-items: baseline; gap: 1rem; border-top: 1px solid var(--rule); font-size: .94rem; }
-    .fresh a { flex: 1; min-width: 0; padding: .6rem 0; overflow-wrap: anywhere; }
-    .fresh li span { color: var(--muted); font: .8rem var(--mono); white-space: nowrap; }
+    .fresh li { position: relative; display: grid; grid-template-columns: 1.25rem 1fr; column-gap: .4rem; padding: .75rem 0;
+                border-top: 1px solid var(--rule); font-size: .94rem; }
+    .fresh li > div { min-width: 0; }
+    .fresh .spark { padding-top: .25rem; }
+    .fresh .spark svg { width: calc(1.1rem * var(--glow)); height: calc(1.1rem * var(--glow)); animation: none; }
+    .fresh a { font-weight: 600; overflow-wrap: anywhere; }
+    .fresh a::after { content: ""; position: absolute; inset: 0; }
+    .fresh .meta { margin: .1rem 0 0; color: var(--muted); font-size: .8rem; }
+    .fresh .desc { font-size: .875rem; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 
     footer { margin: 3.5rem 0 0; padding-top: 1.5rem; border-top: 1px solid var(--rule); color: var(--muted); font-size: .875rem; max-width: 40rem; }
     @media (max-width: 520px) {
@@ -122,23 +136,19 @@
     </div>
     <div class="about">
       <p class="basis">{{ basis or "아직 수집 전이에요" }}</p>
-      {% if view %}
-      <p class="note">최근 {{ days }}일 동안 별이 많이 는 순서예요. 오래된 레포는 별 2만부터 세요.</p>
-      {% else %}
-      <p class="note">최근 30일 안에 생긴 레포 중 별이 빨리 느는 순서예요. 오래된 레포는 지금 뜨는 레포 탭에서 봐요.</p>
-      {% endif %}
+      <p class="note">최근 {{ span }} 동안 별이 많이 는 순서예요.</p>
     </div>
   </header>
 
-  <nav class="fields" aria-label="순위 종류">
-    <a href="/"{% if not view %} aria-current="page"{% endif %}>새로 생긴 레포</a>
-    <a href="/?view=rising"{% if view %} aria-current="page"{% endif %}>지금 뜨는 레포</a>
+  <nav class="tabs" aria-label="순위 대상">
+    <a href="/"{% if not view %} aria-current="page"{% endif %}>새로 생긴 레포<small>30일 안에 생긴 레포만</small></a>
+    <a href="/?view=rising"{% if view %} aria-current="page"{% endif %}>전체 레포<small>오래된 레포는 별 2만부터</small></a>
   </nav>
 
   <div class="columns">
   <section class="ranking" aria-labelledby="rank-title">
     <div class="title">
-      <h2 id="rank-title">{% if view %}{{ days }}일{% else %}하루{% endif %} 별 증가 순위</h2>
+      <h2 id="rank-title">{{ span }} 별 증가 순위</h2>
       <p class="count">{% if field_name %}{{ field_name }} {{ items | length }}개{% else %}레포 {{ total }}개{% endif %}</p>
     </div>
     {% if fields %}
@@ -158,7 +168,7 @@
 <div>
 <div class="head">
 <a class="name" href="{{ r.url }}">{{ r.full_name }}</a>
-{% if view %}<span class="gain">{{ r.days }}일 <b>{{ "{:+,}".format(r.gained) }}</b></span>{% else %}<span class="gain">하루 <b>{{ "{:+,.1f}".format(r.stars_per_day) }}</b>{% if r.estimated %} <span class="est">(첫 기록이라 생성 후 평균)</span>{% elif r.observed_hours < 23 %} <span class="est">({{ r.observed_hours }}시간 관측)</span>{% endif %}</span>{% endif %}
+{% if view %}<span class="gain">{{ span }} <b>{{ "{:+,}".format(r.gained) }}</b></span>{% else %}<span class="gain">하루 <b>{{ "{:+,.1f}".format(r.stars_per_day) }}</b>{% if r.estimated %} <span class="est">(첫 기록이라 생성 후 평균)</span>{% elif r.observed_hours < 23 %} <span class="est">({{ r.observed_hours }}시간 관측)</span>{% endif %}</span>{% endif %}
 </div>
 {% if r.card and r.card.summary %}<p class="desc"><span class="tag">AI</span>{{ r.card.summary }}</p>
 {% elif r.description %}<p class="desc">{{ r.description }}</p>{% endif %}
@@ -203,21 +213,27 @@
     </ol>
   </section>
 
-  {% if not view %}
   <aside class="fresh" aria-labelledby="fresh-title">
-    <h2 id="fresh-title">오늘 처음 순위에 든 레포</h2>
+    <h2 id="fresh-title">오늘 새로 든 레포</h2>
     {% if fresh %}
     <p class="sum">최근 24시간 <b>{{ fresh | length }}</b>개</p>
     <ul>
       {% for r in fresh %}
-      <li><a href="#r{{ r.rank }}">{{ r.full_name }}</a><span>{{ r.rank }}위</span></li>
+      <li style="--glow: {{ r.glow }}">
+        <span class="spark" aria-hidden="true"><svg><use href="#spark"/></svg></span>
+        <div>
+          <a href="#r{{ r.rank }}">{{ r.full_name }}</a>
+          <p class="meta">{{ r.rank }}위 · {{ span }} {{ "{:+,.0f}".format(r.gained if view else r.stars_per_day) }}{% if r.card %} · {{ r.card.category_name }}{% endif %}</p>
+          {% set about = (r.card and r.card.summary) or r.description %}
+          {% if about %}<p class="desc">{{ about }}</p>{% endif %}
+        </div>
+      </li>
       {% endfor %}
     </ul>
     {% else %}
     <p class="sum">최근 24시간에는 없어요.</p>
     {% endif %}
   </aside>
-  {% endif %}
   </div>
 
   <footer>

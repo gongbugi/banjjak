@@ -21,7 +21,7 @@ from banjjak import db
 from banjjak.analyze import CATEGORY_NAMES
 from banjjak.cards import KST, ai_usage, attach_cards, attach_entry, success_ratio, weekly_tally
 from banjjak.probe import USER_AGENT as PROBE_AGENT
-from banjjak.rising import rising
+from banjjak.rising import entrants, rising
 from banjjak.trending import latest_capture, trending
 
 # 지표는 이 앱에 없다. banjjak.serve가 9100 포트로 따로 낸다 (공개 입구로 새지 않게)
@@ -231,12 +231,14 @@ def _rising_body(request, field):
     with db.engine().connect() as conn:
         updated, items = rising(conn)
         attach_cards(conn, items)
+        new = entrants(conn, updated, items)
     _shine(items, "gained")
     fields, shown = _by_field(items, field)
+    days = items[0]["days"] if items else 1
     return templates.TemplateResponse(request, "index.html", {
         "basis": _basis_text(updated), "items": shown, "total": len(items), "fields": fields,
         "field": field, "field_name": CATEGORY_NAMES.get(field), "view": "rising",
-        "days": max((i["days"] for i in items), default=7)}).body   # 제목은 쌓인 날수만큼만 말한다
+        "span": "하루" if days == 1 else f"{days}일", "fresh": [i for i in shown if i["id"] in new]}).body
 
 
 def _index_body(request, field):
@@ -247,4 +249,5 @@ def _index_body(request, field):
     # 템플릿은 요청(주소 · 헤더)을 쓰지 않는다. 분야는 캐시 키에 든다 → 같은 키면 누구에게나 같은 HTML
     return templates.TemplateResponse(request, "index.html", {
         "basis": basis_text, "items": shown, "total": len(items), "fields": fields,
-        "field": field, "field_name": CATEGORY_NAMES.get(field), "fresh": [i for i in shown if i["entry_day"] == 1]}).body
+        "field": field, "field_name": CATEGORY_NAMES.get(field), "span": "하루",
+        "fresh": [i for i in shown if i["entry_day"] == 1]}).body

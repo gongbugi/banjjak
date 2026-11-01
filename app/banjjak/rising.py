@@ -1,11 +1,11 @@
-"""지금 뜨는 레포 탭: 별 많은 레포와 최근 뜬 레포를 하루 한 번 재서 7일 증가순으로 보여 준다. CronJob이 하루 한 번 돌린다.
+"""전체 레포 탭: 별 많은 레포와 최근 뜬 레포를 하루 한 번 재서 하루 증가순으로 보여 준다. CronJob이 하루 한 번 돌린다.
 수집기(최근 30일 · 매시간)와 표 · CronJob을 나눈다 → 신선도 SLI와 섞이지 않는다 (지표 하나에 원인 하나)."""
 import os
 import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import distinct_on, insert
+from sqlalchemy.dialects.postgresql import insert
 
 from banjjak import db
 from banjjak.collect import PER_PAGE, github_search, pages, save_repo
@@ -14,7 +14,6 @@ BIG_STARS = 20_000
 NEW_DAYS, NEW_STARS = 120, 1_000   # 최근 120일 안에 생겼으면 별 1천부터. pushed: 조건은 쓰지 않는다 (코드가 그대로여도 뜰 수 있다)
 SEARCH_PAGES = 10                  # 검색은 한 질의에 1,000개까지만 준다
 PAUSE = 2.1                        # 검색은 분당 30회까지
-WINDOW = timedelta(days=7, minutes=30)   # 재는 시각이 밀려도 7일 전 기록까지 잡는다
 
 
 def paced(search):
@@ -50,27 +49,41 @@ def save(conn, found, now):
         conn.execute(insert(db.star_daily).values(repo_id=it["id"], captured_at=now, stars=it["stargazers_count"]))
 
 
-def rising(conn, limit=50):
-    """(기록 시각, 순위). 레포마다 7일 안의 가장 이른 기록과 비교한다 → 쌓인 날이 적으면 그만큼만 (실제 값은 최솟값)."""
-    s, r = db.star_daily, db.repos
-    latest = conn.execute(select(func.max(s.c.captured_at))).scalar()
-    if latest is None:
-        return None, []
-    first = (select(s).ext(distinct_on(s.c.repo_id)).where(s.c.captured_at >= latest - WINDOW)
-             .order_by(s.c.repo_id, s.c.captured_at).subquery())
-    gained = (s.c.stars - first.c.stars).label("gained")
+def _before(conn, at):
+    return at and conn.execute(select(func.max(db.star_daily.c.captured_at)).where(db.star_daily.c.captured_at < at)).scalar()
+
+
+def _ranking(conn, at, limit):
+    """at 기록과 그 직전 기록의 별 차이 순. 직전 기록이 없으면 순위도 없고, 하루 못 쟀으면 그만큼 긴 기간의 증가다 (days)."""
+    since = _before(conn, at)
+    if since is None:
+        return []
+    s, old, r = db.star_daily, db.star_daily.alias(), db.repos
+    gained = (s.c.stars - old.c.stars).label("gained")
     rows = conn.execute(
-        select(r, s.c.stars, first.c.captured_at.label("since"), gained).select_from(r)
+        select(r, s.c.stars, gained).select_from(r)
         .join(s, s.c.repo_id == r.c.id)
-        .join(first, first.c.repo_id == r.c.id)
-        .where(s.c.captured_at == latest, first.c.captured_at < latest)
+        .join(old, old.c.repo_id == r.c.id)
+        .where(s.c.captured_at == at, old.c.captured_at == since)
         .order_by(gained.desc(), r.c.id).limit(limit)
     ).mappings()
-    return latest, [{
+    return [{
         "rank": i, "id": row["id"], "full_name": row["full_name"], "url": row["html_url"], "description": row["description"],
         "language": row["language"], "stars": row["stars"], "gained": row["gained"],
-        "days": max(round((latest - row["since"]).total_seconds() / 86400), 1),
+        "days": max(round((at - since).total_seconds() / 86400), 1),
     } for i, row in enumerate(rows, 1)]
+
+
+def rising(conn, limit=50):
+    """(기록 시각, 순위)."""
+    latest = conn.execute(select(func.max(db.star_daily.c.captured_at))).scalar()
+    return latest, _ranking(conn, latest, limit)
+
+
+def entrants(conn, at, items):
+    """순위(items) 중 직전 순위에 없던 레포의 id. 직전 순위를 매길 기록이 아직 없으면 없다고 본다."""
+    before = {i["id"] for i in _ranking(conn, _before(conn, at), len(items))}
+    return {i["id"] for i in items} - before if before else set()
 
 
 def main():
