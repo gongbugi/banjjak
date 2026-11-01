@@ -17,6 +17,8 @@ $Targets = 'azure-banjjak', 'azure-banjjak-ops'   # 환경 이름. deploy.yml의
 $Sub    = Az account show --query id -o tsv
 $Tenant = Az account show --query tenantId -o tsv
 $Scope  = "/subscriptions/$Sub/resourceGroups/$Rg"
+# 이 저장소의 토큰 subject는 이름 대신 바뀌지 않는 ID를 쓴다 (repo:소유자@ID/레포@ID:...). 형식은 GitHub에 묻는다
+$Prefix = Gh api "repos/$Repo/actions/oidc/customization/sub" --jq .sub_claim_prefix
 
 Az identity create -g $Rg -n $Name -o none
 $Client = Az identity show -g $Rg -n $Name --query clientId -o tsv
@@ -24,7 +26,7 @@ $Object = Az identity show -g $Rg -n $Name --query principalId -o tsv
 foreach ($t in $Targets) {
     Az identity federated-credential create -g $Rg --identity-name $Name -n $t `
         --issuer 'https://token.actions.githubusercontent.com' `
-        --subject "repo:${Repo}:environment:$t" --audiences 'api://AzureADTokenExchange' -o none
+        --subject "${Prefix}:environment:$t" --audiences 'api://AzureADTokenExchange' -o none
 }
 
 # 기본 제공 역할(Virtual Machine Contributor)은 VM 삭제까지 되므로 Run Command만 담은 역할을 따로 만든다
