@@ -2,7 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
-from banjjak import db
+from banjjak import db, main
+from banjjak.analyze import METHOD
 from banjjak.collect import PER_PAGE, collect_once
 from banjjak.main import app
 from banjjak.rising import candidates, rising, save, sweep
@@ -89,10 +90,33 @@ def test_daily_records_stay_out_of_the_hourly_ranking():
         assert latest_capture(conn) == NOW - 3 * DAY
 
 
+def test_title_and_note_say_how_many_days_are_recorded():
+    record(NOW - 2 * DAY, item(1, 30_000))
+    record(NOW, item(1, 30_900))
+    tab = client.get("/?view=rising").text
+    assert "2일 별 증가 순위" in tab and "최근 2일 동안" in tab
+
+
+def test_tab_filters_by_field_and_stays_on_the_tab():
+    record(NOW - 2 * DAY, item(1, 30_000, "x/tool"), item(2, 30_000, "x/art"))
+    record(NOW, item(1, 30_900, "x/tool"), item(2, 30_100, "x/art"))
+    with db.engine().begin() as conn:
+        conn.execute(db.analyses.insert(), [{"repo_id": i, "method": METHOD, "analyzed_at": NOW, "checked_at": NOW, "ok": True,
+                                             "category": c, "readme_sha": "s"} for i, c in ((1, "dev-tools"), (2, "creative"))])
+    tab = client.get("/?view=rising&field=dev-tools").text
+    assert "x/tool" in tab and "x/art" not in tab
+    assert '<a href="/?view=rising&amp;field=dev-tools" aria-current="page">' in tab
+    assert '<a href="/?view=rising&amp;field=creative">' in tab and '<a href="/?view=rising">전체' in tab
+    none = client.get("/?view=rising&field=security").text
+    assert "이 분야 레포가 없어요" in none and '<a href="/?view=rising">전체 보기</a>' in none
+    client.get("/?view=rising&field=<script>")
+    assert sorted(main._cache) == ["rising", "rising:dev-tools", "rising:security"]   # 캐시 칸은 아는 분야만큼
+
+
 def test_tab_shows_the_ranking_and_only_known_views_are_taken():
     record(NOW - 2 * DAY, item(1, 30_000, "x/old"))
     record(NOW, item(1, 30_900, "x/old"))
     tab = client.get("/?view=rising").text
     assert "x/old" in tab and "<b>+900</b>" in tab and "2일" in tab
-    assert "이번 주 순위에 새로 든 레포" not in tab
+    assert "오늘 처음 순위에 든 레포" not in tab and "등장" not in tab   # 첫 분석이 11-01로 몰린 탭이라 며칠째가 뜻이 없다
     assert "최근 30일 안에 생긴 레포" in client.get("/?view=nope").text   # 모르는 값은 기본 화면 → 캐시 칸이 늘지 않는다

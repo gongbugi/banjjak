@@ -19,7 +19,7 @@ from sqlalchemy import text
 
 from banjjak import db
 from banjjak.analyze import CATEGORY_NAMES
-from banjjak.cards import KST, ai_usage, attach_cards, success_ratio, weekly_tally
+from banjjak.cards import KST, ai_usage, attach_cards, attach_entry, success_ratio, weekly_tally
 from banjjak.probe import USER_AGENT as PROBE_AGENT
 from banjjak.rising import rising
 from banjjak.trending import latest_capture, trending
@@ -167,7 +167,7 @@ def _read(path):
 def _snapshot():
     with db.engine().connect() as conn:
         updated = latest_capture(conn)
-        items = attach_cards(conn, trending(conn))
+        items = attach_entry(conn, attach_cards(conn, trending(conn)), _now())
         return (updated.isoformat() if updated else None), items, weekly_tally(conn, _now())
 
 
@@ -201,11 +201,10 @@ def api_trending():
 
 @app.get("/", dependencies=[Depends(_fault)])
 def index(request: Request, field: str | None = None, view: str | None = None):
-    if view == "rising":   # 보기도 정해진 값만 받는다
-        return HTMLResponse(_cached("rising", lambda: _rising_body(request)))
-    # 분야는 정해진 목록에서만 받는다. 모르는 값은 전체로 → 캐시 칸도 아는 분야만큼만 생긴다
+    # 분야 · 보기는 정해진 목록에서만 받는다. 모르는 값은 전체로 → 캐시 칸도 아는 분야만큼만 생긴다
     field = field if field in CATEGORY_NAMES else None
-    return HTMLResponse(_cached(f"index:{field}" if field else "index", lambda: _index_body(request, field)))
+    page, build = ("rising", _rising_body) if view == "rising" else ("index", _index_body)
+    return HTMLResponse(_cached(f"{page}:{field}" if field else page, lambda: build(request, field)))
 
 
 def _basis_text(at):
@@ -220,29 +219,32 @@ def _shine(items, key):
         i["glow"] = round(0.35 + 0.65 * (max(i[key], 0) / top) ** 0.5, 2) if top > 0 else 0.35
 
 
-def _rising_body(request):
+def _by_field(items, field):
+    """분야 칩과 그 분야만 거른 목록. 칩의 수는 거르기 전 전체에서 센다."""
+    counts = Counter(i["card"]["category"] for i in items if i["card"])
+    fields = [{"slug": s, "name": CATEGORY_NAMES[s], "count": n}   # 많은 순, 미분류는 분야가 아니라 맨 뒤
+              for s, n in sorted(counts.items(), key=lambda c: (c[0] == "unclassified", -c[1], CATEGORY_NAMES[c[0]]))]
+    return fields, [i for i in items if field is None or (i["card"] and i["card"]["category"] == field)]
+
+
+def _rising_body(request, field):
     with db.engine().connect() as conn:
         updated, items = rising(conn)
         attach_cards(conn, items)
     _shine(items, "gained")
+    fields, shown = _by_field(items, field)
     return templates.TemplateResponse(request, "index.html", {
-        "basis": _basis_text(updated), "items": items, "total": len(items), "fields": [],
-        "field": None, "field_name": None, "week": [], "view": "rising"}).body
+        "basis": _basis_text(updated), "items": shown, "total": len(items), "fields": fields,
+        "field": field, "field_name": CATEGORY_NAMES.get(field), "view": "rising",
+        "days": max((i["days"] for i in items), default=7)}).body   # 제목은 쌓인 날수만큼만 말한다
 
 
 def _index_body(request, field):
-    updated_at, items, week = _snapshot()
+    updated_at, items, _ = _snapshot()
     basis_text = _basis_text(datetime.fromisoformat(updated_at) if updated_at else None)
     _shine(items, "stars_per_day")
-    counts = Counter(i["card"]["category"] for i in items if i["card"])
-    fields = [{"slug": s, "name": CATEGORY_NAMES[s], "count": n}   # 많은 순, 미분류는 분야가 아니라 맨 뒤
-              for s, n in sorted(counts.items(), key=lambda c: (c[0] == "unclassified", -c[1], CATEGORY_NAMES[c[0]]))]
-    shown = [i for i in items if field is None or (i["card"] and i["card"]["category"] == field)]
-    # 주간 막대: 이번 주 · 지난주 통틀어 가장 큰 수가 100%
-    peak = max((max(w["this_week"], w["last_week"]) for w in week), default=0) or 1
-    for w in week:
-        w["this_pct"], w["last_pct"] = round(100 * w["this_week"] / peak, 1), round(100 * w["last_week"] / peak, 1)
+    fields, shown = _by_field(items, field)
     # 템플릿은 요청(주소 · 헤더)을 쓰지 않는다. 분야는 캐시 키에 든다 → 같은 키면 누구에게나 같은 HTML
     return templates.TemplateResponse(request, "index.html", {
         "basis": basis_text, "items": shown, "total": len(items), "fields": fields,
-        "field": field, "field_name": CATEGORY_NAMES.get(field), "week": week}).body
+        "field": field, "field_name": CATEGORY_NAMES.get(field), "fresh": [i for i in shown if i["entry_day"] == 1]}).body

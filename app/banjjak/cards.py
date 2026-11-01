@@ -42,6 +42,17 @@ def attach_cards(conn, items):
     return items
 
 
+def attach_entry(conn, items, now):
+    """순위 항목마다 순위에 처음 든 지 며칠째인지(entry_day)를 붙인다. 처음 분석된 때가 '새로 든 때'다. 분석 전이면 방금 든 것이다."""
+    # ponytail: 빠졌다 돌아와도 첫 등장부터 세고, 기록은 2026-10-21부터라 그전 레포는 실제보다 짧다. 연속 일수는 순위 이력을 남겨야 한다
+    a = db.analyses
+    first = dict(conn.execute(select(a.c.repo_id, func.min(a.c.analyzed_at))
+                              .where(a.c.repo_id.in_([i["id"] for i in items]), a.c.method == METHOD).group_by(a.c.repo_id)).all())
+    for i in items:
+        i["entry_day"] = (now - first.get(i["id"], now)).days + 1
+    return items
+
+
 def week_start(now):
     """이번 주 월요일 0시 (한국 시간)."""
     local = now.astimezone(KST)

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% if view %}지금 뜨는 레포 | {% elif field_name %}{{ field_name }} | {% endif %}반짝 | 지금 뜨는 GitHub 레포</title>
+  <title>{% if field_name %}{{ field_name }} | {% endif %}{% if view %}지금 뜨는 레포 | {% endif %}반짝 | 지금 뜨는 GitHub 레포</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;600&display=swap" rel="stylesheet">
@@ -19,7 +19,6 @@
     a { color: inherit; text-underline-offset: .2em; text-decoration-color: #9AA4BA; }
     a:hover { text-decoration-color: var(--ink); }
     a:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 4px; }
-    .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     main { max-width: 72rem; margin: 0 auto; padding: 3.5rem clamp(1rem, 4vw, 2.5rem) 4.5rem; }
     h2 { margin: 0; font-size: 1.25rem; font-weight: 600; }
 
@@ -35,7 +34,7 @@
 
     .columns { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 3rem 4rem; margin-top: 2.5rem; }
     .ranking { flex: 999 1 35rem; min-width: 0; }
-    .week { flex: 1 1 18.75rem; min-width: 0; }
+    .fresh { flex: 1 1 18.75rem; min-width: 0; }
     .title { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .25rem 1rem; }
     .count { margin: 0; color: var(--muted); font-size: .875rem; }
 
@@ -49,7 +48,8 @@
     .fields a[aria-current] .n { color: #C9D0DF; }
 
     .ranking ol { list-style: none; margin: 1.25rem 0 0; padding: 0; }
-    .repo { display: grid; grid-template-columns: 2rem 2.25rem 1fr; column-gap: .5rem; padding: 1.4rem 0; border-top: 1px solid var(--rule); }
+    .repo { display: grid; grid-template-columns: 2rem 2.25rem 1fr; column-gap: .5rem; padding: 1.4rem 0; border-top: 1px solid var(--rule); scroll-margin-top: 1rem; }
+    .repo:target { box-shadow: inset 3px 0 0 var(--star); }   /* 오늘 처음 든 레포 목록에서 눌러 온 행 */
     .repo > div { min-width: 0; }   /* 긴 설치 명령이 칸을 넓혀 화면 밖으로 밀지 않게: 코드 블록 안에서만 스크롤 */
     .rank { color: var(--muted); font: .94rem/1.9 var(--mono); text-align: right; }
     .spark { display: flex; justify-content: center; padding-top: .3rem; }
@@ -90,20 +90,13 @@
     .related { display: flex; flex-wrap: wrap; gap: .1rem 1rem; }
     .empty { margin: 0; padding: 1.25rem 0; border-top: 1px solid var(--rule); color: var(--muted); }
 
-    /* 이번 주 · 지난주 막대: 채움과 테두리로 나눈다 (색만으로 나누지 않게) */
-    .week .sum { margin: .4rem 0 0; color: var(--muted); font-size: .94rem; }
-    .week .sum b { color: var(--ink); font-family: var(--mono); }
-    .legend { margin: .75rem 0 0; display: flex; gap: 1rem; font-size: .8rem; color: var(--muted); }
-    .legend span::before { content: ""; display: inline-block; width: 16px; height: 8px; margin-right: 6px; border-radius: 2px; vertical-align: middle; }
-    .legend .this::before, .bars .this { background: var(--ink); }
-    .legend .last::before, .bars .last { border: 1.5px solid var(--muted); }
-    .week ul { list-style: none; margin: 1.25rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .9rem; }
-    .week .other { padding-top: .9rem; border-top: 1px solid var(--rule); }
-    .row { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; font-size: .94rem; }
-    .row b { font-family: var(--mono); }
-    .prev { color: var(--muted); font-size: .8rem; white-space: nowrap; }
-    .bars { margin-top: .4rem; display: flex; flex-direction: column; gap: 3px; }
-    .bars span { display: block; height: 8px; border-radius: 2px; width: var(--w); }
+    /* 오늘 처음 든 레포: 순위의 그 행으로 가는 링크 목록 */
+    .fresh .sum { margin: .4rem 0 0; color: var(--muted); font-size: .94rem; }
+    .fresh .sum b { color: var(--ink); font-family: var(--mono); }
+    .fresh ul { list-style: none; margin: 1rem 0 0; padding: 0; }
+    .fresh li { display: flex; align-items: baseline; gap: 1rem; border-top: 1px solid var(--rule); font-size: .94rem; }
+    .fresh a { flex: 1; min-width: 0; padding: .6rem 0; overflow-wrap: anywhere; }
+    .fresh li span { color: var(--muted); font: .8rem var(--mono); white-space: nowrap; }
 
     footer { margin: 3.5rem 0 0; padding-top: 1.5rem; border-top: 1px solid var(--rule); color: var(--muted); font-size: .875rem; max-width: 40rem; }
     @media (max-width: 520px) {
@@ -130,7 +123,7 @@
     <div class="about">
       <p class="basis">{{ basis or "아직 수집 전이에요" }}</p>
       {% if view %}
-      <p class="note">최근 7일 동안 별이 많이 는 순서예요. 오래된 레포는 별 2만부터 세요.</p>
+      <p class="note">최근 {{ days }}일 동안 별이 많이 는 순서예요. 오래된 레포는 별 2만부터 세요.</p>
       {% else %}
       <p class="note">최근 30일 안에 생긴 레포 중 별이 빨리 느는 순서예요. 오래된 레포는 지금 뜨는 레포 탭에서 봐요.</p>
       {% endif %}
@@ -145,21 +138,21 @@
   <div class="columns">
   <section class="ranking" aria-labelledby="rank-title">
     <div class="title">
-      <h2 id="rank-title">{{ "7일 별 증가 순위" if view else "하루 별 증가 순위" }}</h2>
+      <h2 id="rank-title">{% if view %}{{ days }}일{% else %}하루{% endif %} 별 증가 순위</h2>
       <p class="count">{% if field_name %}{{ field_name }} {{ items | length }}개{% else %}레포 {{ total }}개{% endif %}</p>
     </div>
     {% if fields %}
     <nav class="fields" aria-label="분야별 보기">
-      <a href="/"{% if not field %} aria-current="page"{% endif %}>전체<span class="n">{{ total }}</span></a>
+      <a href="/{% if view %}?view=rising{% endif %}"{% if not field %} aria-current="page"{% endif %}>전체<span class="n">{{ total }}</span></a>
       {% for f in fields %}
-      <a href="/?field={{ f.slug }}"{% if f.slug == field %} aria-current="page"{% endif %}>{{ f.name }}<span class="n">{{ f.count }}</span></a>
+      <a href="/?{% if view %}view=rising&amp;{% endif %}field={{ f.slug }}"{% if f.slug == field %} aria-current="page"{% endif %}>{{ f.name }}<span class="n">{{ f.count }}</span></a>
       {% endfor %}
     </nav>
     {% endif %}
     <ol>
     {# 50번 되풀이되는 칸이라 들여쓰기 없이 쓴다: 공백만으로 응답이 10KB 넘게 늘었다 (급증 때 송신량) #}
     {% for r in items %}
-<li class="repo" style="--glow: {{ r.glow }}; --delay: {{ [loop.index0 * 40, 1200] | min }}ms">
+<li class="repo" id="r{{ r.rank }}" style="--glow: {{ r.glow }}; --delay: {{ [loop.index0 * 40, 1200] | min }}ms">
 <span class="rank">{{ r.rank }}</span>
 <span class="spark" aria-hidden="true"><svg><use href="#spark"/></svg></span>
 <div>
@@ -173,6 +166,7 @@
 {% if r.card %}<span class="field">{{ r.card.category_name }}</span>{% endif %}
 {% if r.language %}<span>{{ r.language }}</span>{% endif %}
 <span>별 {{ "{:,}".format(r.stars) }}개</span>
+{% if not view %}<span>{% if r.entry_day == 1 %}오늘 첫 등장{% else %}등장 {{ r.entry_day }}일째{% endif %}</span>{% endif %}
 </p>
 {% if r.card %}
 <details>
@@ -198,10 +192,10 @@
 </div>
 </li>
     {% else %}
-      {% if view %}
+      {% if field %}
+      <li class="empty">지금 순위에 이 분야 레포가 없어요. <a href="/{% if view %}?view=rising{% endif %}">전체 보기</a></li>
+      {% elif view %}
       <li class="empty">기록을 쌓는 중이에요. 하루 한 번 재서 둘째 날부터 보여요.</li>
-      {% elif field %}
-      <li class="empty">지금 순위에 이 분야 레포가 없어요. <a href="/">전체 보기</a></li>
       {% else %}
       <li class="empty">아직 수집된 레포가 없어요. 수집기는 매시 정각에 돌아요.</li>
       {% endif %}
@@ -210,36 +204,24 @@
   </section>
 
   {% if not view %}
-  <aside class="week" aria-labelledby="week-title">
-    <h2 id="week-title">이번 주 순위에 새로 든 레포</h2>
-    {% set has_last = week | selectattr("last_week") | list | length > 0 %}
-    {% if week %}
-    <p class="sum">이번 주 <b>{{ week | sum(attribute="this_week") }}</b>개{% if has_last %} · 지난주 {{ week | sum(attribute="last_week") }}개{% endif %}</p>
-    {% if has_last %}<p class="legend" aria-hidden="true"><span class="this">이번 주</span><span class="last">지난주</span></p>{% endif %}
+  <aside class="fresh" aria-labelledby="fresh-title">
+    <h2 id="fresh-title">오늘 처음 순위에 든 레포</h2>
+    {% if fresh %}
+    <p class="sum">최근 24시간 <b>{{ fresh | length }}</b>개</p>
     <ul>
-      {% for w in week %}
-      {% set d = w.this_week - w.last_week %}
-      <li{% if w.slug == "unclassified" %} class="other"{% endif %}>
-        <div class="row">
-          <span>{{ w.name }}</span>
-          <span><b>{{ w.this_week }}</b>{% if has_last %} <span class="prev">지난주 {{ w.last_week }} · {% if d > 0 %}<span aria-hidden="true">▲</span><span class="sr">늘어 </span>{{ d }}{% elif d < 0 %}<span aria-hidden="true">▼</span><span class="sr">줄어 </span>{{ -d }}{% else %}같음{% endif %}</span>{% endif %}</span>
-        </div>
-        <div class="bars" aria-hidden="true">
-          <span class="this" style="--w: {{ w.this_pct }}%"></span>
-          {% if has_last %}<span{% if w.last_week %} class="last" style="--w: {{ w.last_pct }}%"{% endif %}></span>{% endif %}
-        </div>
-      </li>
+      {% for r in fresh %}
+      <li><a href="#r{{ r.rank }}">{{ r.full_name }}</a><span>{{ r.rank }}위</span></li>
       {% endfor %}
     </ul>
     {% else %}
-    <p class="note">이번 주 분석이 아직 없어요. 분석기는 매시 20분에 돌아요.</p>
+    <p class="sum">최근 24시간에는 없어요.</p>
     {% endif %}
   </aside>
   {% endif %}
   </div>
 
   <footer>
-    분야, 설치 방법, 알아둘 점은 AI 없이 README를 정해진 규칙으로 읽어 뽑았어요. 틀릴 수 있으니 원문도 확인해 주세요.
+    분야, 요약, 알아둘 점은 AI나 정해진 규칙이 README를 읽어 뽑았어요. 틀릴 수 있으니 원문도 확인해 주세요.
     알아둘 점은 README 문장을 그대로 옮긴 것이에요.
   </footer>
 </main>

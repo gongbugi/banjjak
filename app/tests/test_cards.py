@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from banjjak import db, main
 from banjjak.analyze import METHOD, NotFound, analyze_once
-from banjjak.cards import weekly_tally
+from banjjak.cards import attach_entry, weekly_tally
 from banjjak.collect import collect_once
 
 client = TestClient(main.app)
@@ -106,6 +106,38 @@ def test_weekly_tally_leaves_out_old_repos_only_the_rising_tab_ranked():
         collect_once(lambda q, p: {"items": [_item(1, "o/new", [], 100), old] if p == 1 else []}, conn, NOW)
         conn.execute(insert(db.analyses), [_analysis(1, NOW), _analysis(2, NOW)])
         assert [(t["slug"], t["this_week"]) for t in weekly_tally(conn, NOW)] == [("dev-tools", 1)]
+
+
+def test_entry_day_counts_from_the_first_analysis():
+    items = [_item(i, f"o/r{i}", [], 100) for i in (1, 2, 3)]
+    with db.engine().begin() as conn:
+        collect_once(lambda q, p: {"items": items if p == 1 else []}, conn, NOW)
+        conn.execute(insert(db.analyses), [
+            _analysis(1, NOW - timedelta(hours=23)),
+            _analysis(2, NOW - timedelta(hours=25)),
+            {**_analysis(2, NOW - timedelta(hours=1)), "readme_sha": "new"},   # 다시 분석해도 첫 분석부터 센다
+        ])
+        got = attach_entry(conn, [{"id": 1}, {"id": 2}, {"id": 3}], NOW)
+    assert [i["entry_day"] for i in got] == [1, 2, 1]                          # 3번은 순위에 들었지만 아직 분석 전
+
+
+def test_panel_lists_todays_entrants_and_rows_show_the_day(monkeypatch):
+    monkeypatch.setattr(main, "_now", lambda: NOW)
+    items = [_item(1, "o/old", [], 300), _item(2, "o/new", [], 200), _item(3, "o/art", [], 100)]
+    with db.engine().begin() as conn:
+        collect_once(lambda q, p: {"items": items if p == 1 else []}, conn, NOW)
+        conn.execute(insert(db.analyses), [_analysis(1, NOW - timedelta(days=3), "security"), _analysis(2, NOW - timedelta(hours=2)),
+                                           _analysis(3, NOW - timedelta(hours=2), "creative")])
+    html = client.get("/").text
+    panel = html.split("<aside")[1]
+    assert 'href="#r2">o/new' in panel and 'href="#r3">o/art' in panel and "o/old" not in panel
+    assert '<li class="repo" id="r2"' in html                     # 목록에서 누르면 순위의 그 행으로 간다
+    assert "등장 4일째" in html and "오늘 첫 등장" in html
+    assert "이번 주 순위에 새로 든 레포" not in html
+    assert "o/art" not in client.get("/?field=dev-tools").text    # 분야로 거르면 목록도 그 분야만
+    assert "최근 24시간에는 없어요" in client.get("/?field=security").text
+    api = client.get("/api/trending").json()
+    assert [i["entry_day"] for i in api["items"]] == [4, 1, 1] and api["week"]   # 분야 집계는 API에 남는다
 
 
 def test_success_ratio_metric(monkeypatch):
