@@ -53,6 +53,8 @@ jobs:
           got=$(title slack_test_resolved.json); echo "$got"; test "$got" = "🟢 풀림 [local-k3d] · DataStale"
       # 공급 실측 계단(#11): 멈춤 규칙 (가짜 docker로, 실제 부하는 비공개 레포의 load 워크플로가 넣는다)
       - run: bash deploy/load/ladder_test.sh
+      # CD가 VM에서 돌리는 배포 스크립트: 실패하면 성공 줄이 없어야 한다 (가짜 curl · kubectl로)
+      - run: bash deploy/on-vm_test.sh
 
   image:
     needs: [test, rules]
@@ -76,3 +78,11 @@ jobs:
           tags: |
             ghcr.io/gongbugi/banjjak:latest
             ghcr.io/gongbugi/banjjak:${{ github.sha }}
+
+  # 앱 VM에 올린다 (승인 버튼을 눌러야 돈다). PR은 image가 건너뛰어 여기까지 오지 않는다
+  deploy:
+    needs: image
+    uses: ./.github/workflows/deploy.yml
+    with: {target: azure-banjjak}
+    secrets: inherit
+    permissions: {contents: read, id-token: write}

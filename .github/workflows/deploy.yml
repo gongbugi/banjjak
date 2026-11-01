@@ -1,0 +1,37 @@
+name: deploy
+# 앱 VM은 ci가 main 푸시마다 부른다. 운영 VM은 운영 AI · 장애 주입기까지 함께 바뀌므로 손으로만 (Actions 탭 → deploy → Run workflow).
+# 어느 쪽이든 환경의 승인을 받아야 돌고, main에서만 돈다. 환경 · 권한 설정은 infra/azure/cd-access.ps1
+on:
+  workflow_call:
+    inputs:
+      target: {type: string, required: true}
+  workflow_dispatch:
+    inputs:
+      target: {type: choice, options: [azure-banjjak, azure-banjjak-ops]}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target }}   # 이 이름이 Azure가 믿는 조건이다 (키 없이 GitHub OIDC로 로그인)
+    concurrency: ${{ inputs.target }}   # 같은 VM에 배포가 겹치지 않게
+    permissions: {contents: read, id-token: write}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906   # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: VM 안에서 배포
+        env:
+          target: ${{ inputs.target }}
+        run: |
+          # 이미지가 있으면 그 커밋은 test · rules를 통과했다 (image 작업만 올리고, 그 작업은 둘 다 통과해야 돈다)
+          docker manifest inspect "ghcr.io/gongbugi/banjjak:$GITHUB_SHA" > /dev/null
+          vm=banjjak-vm; [ "$target" = azure-banjjak ] || vm=banjjak-ops
+          # k8s API는 본인 IP에만 열려 있다 → 포트를 열지 않고 VM 에이전트로 돌린다
+          out=$(az vm run-command invoke -g rg-banjjak -n "$vm" --command-id RunShellScript \
+            --scripts @deploy/on-vm.sh --parameters "$target" "$GITHUB_SHA" --query 'value[0].message' -o tsv)
+          echo "$out"
+          # 스크립트가 실패해도 az는 성공을 돌려주므로 마지막 줄로 판단한다
+          grep -q "^deployed $GITHUB_SHA" <<< "$out"
