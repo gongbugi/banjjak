@@ -3,6 +3,7 @@ import sqlite3
 import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 from banjjak import actions
 from banjjak.actions import PLAN, Hands, connect, decide
 from banjjak.checklist import CHECKLISTS, diagnose, replay
-from banjjak.opsai import app, handle, on_click
+from banjjak.opsai import app, handle, message, on_click
 from banjjak.opsai import tick as ops_tick
 
 client = TestClient(app)
@@ -109,15 +110,15 @@ class Ops:
         self.hands = Hands(kube or fake_kube({}), lambda path, body, ctype: self.patched.append((path, body)),
                            self._slack, mode, cluster, buttons, self.prom)
 
-    def _slack(self, message):   # 글만 보내거나, 버튼이 있으면 {"text", "blocks"}
+    def _slack(self, message):   # 글 한 줄이거나 보고 {"text", "blocks"}
         self.messages.append(message)
         self.sent.append(message["text"] if isinstance(message, dict) else message)
         return True
 
-    def click(self, record_id, action, at, user=APPROVER, cluster="azure"):
+    def click(self, record_id, action, at, user=APPROVER, cluster="azure", message=None):
         payload = {"type": "block_actions", "user": {"id": user},
                    "response_url": "https://hooks.slack.com/actions/T1/1/abc",
-                   "actions": [{"action_id": action, "value": f"{cluster}:{record_id}"}]}
+                   "actions": [{"action_id": action, "value": f"{cluster}:{record_id}"}], "message": message or {}}
         with closing(connect(self.db)) as conn:
             on_click(payload, at, conn, self.hands, APPROVER, lambda url, body: self.responses.append((url, body)))
 
@@ -556,7 +557,7 @@ def test_resumed_analyzer_counts_as_recovered_when_its_next_job_succeeds(tmp_pat
 # --- Slack 버튼 (#8 2단계): 기다리는 조치에만 승인 · 거부 버튼. 누를 수 있는 사람은 승인자 한 명 ---
 
 def buttons(message):
-    blocks = message.get("blocks", []) if isinstance(message, dict) else []   # 버튼 없는 글은 문자열
+    blocks = message.get("blocks", []) if isinstance(message, dict) else []   # 실행 결과 같은 글 한 줄은 문자열
     return [(e["action_id"], e["value"]) for b in blocks if b["type"] == "actions" for e in b["elements"]]
 
 
@@ -588,6 +589,57 @@ def test_report_without_an_action_has_no_buttons(tmp_path):
     ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(collect_ok=False)))
     ops.alert("DataStale")
     assert buttons(ops.messages[0]) == []
+
+
+def shown(message):
+    """사람이 보는 글을 위에서 아래로."""
+    return "\n".join(t["text"] for b in message["blocks"] for t in [b.get("text"), *b.get("elements", [])] if t and "text" in t and isinstance(t["text"], str))
+
+
+def test_report_reads_verdict_then_action_then_evidence_and_ends_with_the_buttons(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
+    ops.alert("DataStale")
+    report = ops.messages[0]
+    assert report["blocks"][0] == {"type": "header", "text": {"type": "plain_text", "text": "🩺 데이터 신선도 2시간 · warning · azure"}}
+    assert report["blocks"][-1]["type"] == "actions"
+    text = shown(report)
+    assert text.index("*판단*") < text.index("*조치*") < text.index("*본 것*") < text.index("DataStale")
+    assert "조치: " not in text and "수집기 CronJob 재개" in text
+
+
+def test_report_without_buttons_is_laid_out_the_same(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(collect_ok=False)))
+    ops.alert("DataStale")
+    assert [b["type"] for b in ops.messages[0]["blocks"]] == ["header", "section", "section", "section", "context"]
+
+
+def long_report(saw, verdict="판단"):
+    r = {"cluster": "azure", "alertname": "A" * 200, "sli": None, "severity": "unknown", "verdict": verdict,
+         "evidence": [{"look": "로그", "saw": saw}]}
+    row = {"id": 1, "state": "done", "action": None, "tier": None, "result": ""}
+    return message(r, row, SimpleNamespace(mode="execute", buttons=False, cluster="azure"))
+
+
+def test_long_report_stays_inside_slack_limits():
+    report = long_report("줄" * 4000, verdict="판" * 4000)   # 한도를 넘으면 Slack이 글 전체를 거절해 사람이 못 본다
+    assert len(report["blocks"][0]["text"]["text"]) <= 150
+    assert all(len(b["text"]["text"]) <= 3000 for b in report["blocks"] if b["type"] == "section")
+
+
+def test_text_from_the_cluster_cannot_ping_the_channel_or_hide_a_link():
+    report = long_report("<!channel> <http://evil.example|눌러> & 끝")
+    assert "<" not in shown(report) and "<" not in report["text"]
+    assert "&lt;!channel&gt; &lt;http://evil.example|눌러&gt; &amp; 끝" in shown(report)
+
+
+def test_click_keeps_the_layout_and_swaps_the_buttons_for_the_result(tmp_path):
+    ops = Ops(str(tmp_path / "opsai.db"), fake_kube(cluster(suspend=True)))
+    record = ops.alert("DataStale")
+    sent = ops.messages[0]
+    ops.click(record["id"], "approve", NOW + timedelta(minutes=1), message=sent)
+    body = ops.responses[-1][1]
+    assert body["blocks"][:-1] == sent["blocks"][:-1] and body["blocks"][-1]["type"] == "section"
+    assert "승인" in body["blocks"][-1]["text"]["text"] and "실행" in body["text"]
 
 
 def test_approve_button_runs_it_now(tmp_path):

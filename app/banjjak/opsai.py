@@ -79,7 +79,7 @@ def handle(alert, prom, now, conn, hands, after=None):
     conn.execute("INSERT INTO snapshots (record_id, taken, tape) VALUES (?, ?, ?)",
                  (row["id"], now.timestamp(), json.dumps(tape, ensure_ascii=False)))
     conn.commit()
-    delivered = hands.slack(message(report(record, row, hands), row, hands)) is True   # False = 보내다 실패, None = 보낼 곳 없음. 둘 다 본 사람이 없다
+    delivered = hands.slack(message(record, row, hands)) is True   # False = 보내다 실패, None = 보낼 곳 없음. 둘 다 본 사람이 없다
     row = actions.arm(conn, row, delivered, time.monotonic() - started)
     return {**record, **{k: row[k] for k in ("id", "action", "tier", "state")}}
 
@@ -94,19 +94,42 @@ def tick(conn, now, hands):
         handle(alert, hands.prom, now, conn, hands, after=(before, reason))
 
 
-def message(text, row, hands):
-    """기다리는 조치면 글 아래에 승인 · 거부 버튼을 붙인다. 클릭을 받을 수 없는 곳(앱 토큰 없음)은 글만.
+def _esc(text):
+    """클러스터 · LLM에서 온 글이다. Slack이 <...>를 멘션 · 링크로 읽지 않게 한다."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _section(text):
+    return {"type": "section", "text": {"type": "mrkdwn", "text": text[:2900]}}   # section 글은 3000자까지
+
+
+def message(r, row, hands):
+    """보고 한 건. 사람이 읽는 순서로 판단 → 조치 → 본 것 → 버튼. text는 알림 미리보기에 쓰인다.
+    승인 · 거부 버튼은 기다리는 조치에만 붙인다. 클릭을 받을 수 없는 곳(앱 토큰 없음)은 글만.
     버튼 값은 "클러스터:기록 번호": 로컬 · Azure가 같은 채널에 보내므로, 번호만으로는 어느 DB의 기록인지 모른다."""
-    if row["state"] != "waiting" or not hands.buttons:
-        return text
-    value = f"{hands.cluster}:{row['id']}"
-    button = lambda action_id, label, style: {"type": "button", "action_id": action_id, "value": value,
-                                               "style": style, "text": {"type": "plain_text", "text": label}}
-    now_label = "승인 (지금 실행)" if hands.mode == "execute" else "승인 (지금 드라이런)"
-    return {"text": text, "blocks": [
-        {"type": "section", "text": {"type": "mrkdwn", "text": text[:2900]}},   # section 글은 3000자까지
-        {"type": "actions", "elements": [button("approve", now_label, "primary"), button("reject", "거부", "danger")]},
-    ]}
+    verdict = r["verdict"] or "판단 못 함 → 사람이 봐 주세요"
+    seen = "\n".join(f"• {e['look']}: {e['saw']}" for e in r["evidence"])
+    action = actions.describe(row, hands.mode, hands.buttons)
+    other = ""
+    if "llm" in r:   # LLM이 못 본 이유는 기록에만 둔다 (금지어에 걸린 건을 구별할 수 없게 문구가 하나다)
+        other = "LLM 판단 없음 (점검표로)" if "failed" in r["llm"] else f"점검표: {r['checklist']['verdict'] or '판단 못 함'}"
+    title = f"🩺 {r['sli'] or r['alertname']} · {r['severity']} · {r['cluster']}"
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": title[:150]}},   # 머리글은 150자까지
+        _section(f"*판단*\n{_esc(verdict)}"),
+        _section(f"*조치*\n{_esc(action.removeprefix('조치: '))}"),
+        _section(f"*본 것*\n{_esc(seen)}"),
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": _esc(" · ".join(filter(None, [r["alertname"], other])))[:2900]}]},
+    ]
+    if row["state"] == "waiting" and hands.buttons:
+        value = f"{hands.cluster}:{row['id']}"
+        button = lambda action_id, label, style: {"type": "button", "action_id": action_id, "value": value,
+                                                   "style": style, "text": {"type": "plain_text", "text": label}}
+        now_label = "승인 (지금 실행)" if hands.mode == "execute" else "승인 (지금 드라이런)"
+        blocks.append({"type": "actions", "elements": [button("approve", now_label, "primary"), button("reject", "거부", "danger")]})
+    text = [f"🩺 운영 AI 진단 [{r['cluster']}] · {r['alertname']} ({r['sli'] or 'SLI 모름'} · {r['severity']})",
+            f"판단: {verdict}", other, f"본 것:\n{seen}", action]
+    return {"text": _esc("\n".join(filter(None, text))), "blocks": blocks}
 
 
 def on_click(payload, now, conn, hands, approver, respond):
@@ -128,7 +151,8 @@ def on_click(payload, now, conn, hands, approver, respond):
         print(f"button failed: {type(e).__name__}: {e}", flush=True)
         return respond(url, {"response_type": "ephemeral", "replace_original": False,
                              "text": f"처리하지 못했다 ({type(e).__name__}). 타이머는 그대로니 다시 눌러 주세요"})
-    original = payload.get("message", {}).get("text", "")
+    sent = payload.get("message", {})
+    original = sent.get("text", "")
     if row is None:   # 5분 무응답으로 이미 실행됐거나 이미 누른 버튼
         found = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
         if found is None:
@@ -139,18 +163,10 @@ def on_click(payload, now, conn, hands, approver, respond):
     else:
         verdict = "승인" if clicked["action_id"] == "approve" else "거부"
         done = f"{verdict}: {actions.ICON[row['state']]} · 기록 #{row['id']} {actions.ACTIONS[row['action']][1]} · {row['result']}"
-    return respond(url, {"replace_original": True, "text": f"{original}\n\n{done}" if original else done})
-
-
-def report(r, row, hands):
-    lines = [f"🩺 운영 AI 진단 [{r['cluster']}] · {r['alertname']} ({r['sli'] or 'SLI 모름'} · {r['severity']})",
-             f"판단: {r['verdict'] or '판단 못 함 → 사람이 봐 주세요'}"]
-    if "llm" in r:   # LLM이 못 본 이유는 기록에만 둔다 (금지어에 걸린 건을 구별할 수 없게 문구가 하나다)
-        lines.append("LLM 판단 없음 (점검표로)" if "failed" in r["llm"] else f"점검표: {r['checklist']['verdict'] or '판단 못 함'}")
-    lines.append("본 것:")
-    lines += [f"• {e['look']}: {e['saw']}" for e in r["evidence"]]
-    lines.append(actions.describe(row, hands.mode, hands.buttons))
-    return "\n".join(lines)
+    done = _esc(done)
+    body = {"replace_original": True, "text": f"{original}\n\n{done}" if original else done}
+    kept = [b for b in sent.get("blocks", []) if b["type"] != "actions"]   # 글 모양은 두고 버튼 자리에 결과를 넣는다
+    return respond(url, {**body, "blocks": [*kept, _section(done)]} if kept else body)
 
 
 # 앱 클러스터 읽기 · 쓰기. 할 수 있는 조치 · 이름은 RBAC가 정한다 (deploy/opsai-act)
@@ -165,11 +181,11 @@ def _prom(query):
 
 
 def _slack(message):
-    """글(str) 또는 버튼 붙은 글({"text", "blocks"})을 Incoming Webhook으로 보낸다."""
+    """글(str) 또는 보고({"text", "blocks"})를 Incoming Webhook으로 보낸다."""
     url = os.environ.get("SLACK_WEBHOOK_URL")   # Secret slack-webhook. 없으면(로컬 · 시험) 기록만 한다
     if not url:
         return None
-    return _post(url, message if isinstance(message, dict) else {"text": message})
+    return _post(url, message if isinstance(message, dict) else {"text": _esc(message)})
 
 
 def _respond(url, body):
