@@ -223,6 +223,7 @@ def _shine(items, key):
 def _rising_body(request):
     with db.engine().connect() as conn:
         updated, items = rising(conn)
+        attach_cards(conn, items)
     _shine(items, "gained")
     return templates.TemplateResponse(request, "index.html", {
         "basis": _basis_text(updated), "items": items, "total": len(items), "fields": [],

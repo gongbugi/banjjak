@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import distinct_on
 
 from banjjak import db
 from banjjak.analyze import AI_METHOD, CATEGORY_NAMES, METHOD, NOTE_NAMES
+from banjjak.collect import WINDOW_DAYS
 
 KST = timezone(timedelta(hours=9))   # 한국은 서머타임이 없어 고정 오프셋으로 충분하다
 RELATED = 3
@@ -52,8 +53,12 @@ def weekly_tally(conn, now):
     a = db.analyses
     this_start = week_start(now)
     last_start = this_start - timedelta(days=7)
-    first = select(a.c.repo_id, func.min(a.c.analyzed_at).label("first")).where(a.c.method == METHOD) \
-        .group_by(a.c.repo_id).subquery()
+    # ponytail: 지금 뜨는 탭의 레포도 분석되므로, 새로 생긴 레포 순위에 들 수 있는 나이로 가른다. 지금 뜨는 탭에만 든 신생 레포도
+    # 세지만 2026-11-01 실측은 그런 레포가 0개였다 (30일 이내 12개가 모두 두 탭에 겹침). 정확히 하려면 순위 이력을 남겨야 한다
+    r = db.repos
+    first = (select(a.c.repo_id, func.min(a.c.analyzed_at).label("first")).join(r, r.c.id == a.c.repo_id)
+             .where(a.c.method == METHOD).group_by(a.c.repo_id, r.c.created_at)
+             .having(func.min(a.c.analyzed_at) <= r.c.created_at + timedelta(days=WINDOW_DAYS + 1)).subquery())
     latest = _shown(conn, select(first.c.repo_id).where(first.c.first >= last_start))
     firsts = dict(conn.execute(select(first.c.repo_id, first.c.first).where(first.c.first >= last_start)).all())
     counts = {}   # 분야 → [이번 주, 지난주]
@@ -80,5 +85,5 @@ def ai_usage(conn, now):
     ok, failed, tokens, cost_day, cost = conn.execute(
         select(func.count().filter(day, a.c.ok), func.count().filter(day, ~a.c.ok), func.coalesce(func.sum(a.c.tokens).filter(day), 0),
                func.coalesce(func.sum(a.c.cost).filter(day), 0), func.coalesce(func.sum(a.c.cost), 0))
-        .where(a.c.method == AI_METHOD)).one()
+        .where(a.c.method.like("ai-%"))).one()    # 프롬프트 버전을 올려도 쓴 돈은 그대로 센다
     return {"ok": ok, "failed": failed, "tokens": tokens, "cost_day_dollars": cost_day, "cost_dollars": cost}

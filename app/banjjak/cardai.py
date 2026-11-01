@@ -13,16 +13,15 @@ from datetime import datetime, timezone
 from sqlalchemy import or_, select
 
 from banjjak import db, llm
-from banjjak.analyze import AI_METHOD, CATEGORY_NAMES, NOTE_NAMES, RANKED, RECHECK
+from banjjak.analyze import AI_METHOD, CATEGORY_NAMES, NOTE_NAMES, RECHECK, ranked
 from banjjak.cards import ai_usage, latest_ok
-from banjjak.trending import trending
 
 MODEL = "claude-haiku-5-5"
 EFFORT = "medium"        # 모델 기본값. 돈은 대부분 입력이라 낮춰도 얼마 안 준다
 MAX_TOKENS = 4000
 README_CHARS = 30_000    # 앞부분만 보낸다. 표본 평균 18,587자 · 90%가 39,100자 (10-31)
-MIN_EVIDENCE = 12        # 낱말 하나를 근거라고 내지 못하게
-AIM_SUMMARY = 90         # 프롬프트가 부르는 길이. 모델이 넘치므로 관문보다 짧게 부른다 (ai-v1 평가: 통과분이 67~114자)
+MIN_EVIDENCE = 15        # 바이트. 낱말 하나를 근거라고 내지 못하게 (글자 수로 재면 한자 한 문장이 영어 낱말보다 짧다)
+AIM_SUMMARY = 60         # 프롬프트가 부르는 길이. 모델이 넘치므로 관문보다 짧게 부른다 (ai-v1 평가: 90자를 부르니 통과분이 67~114자)
 MAX_SUMMARY = 120
 DEADLINE = 300           # 한 실행 (초). 분석기 Job 마감 600초 안에서 코드판 몫을 남긴다
 # 응답을 못 받으면 얼마를 썼는지 모른다. 상한은 최악으로 센다 (글자당 2토큰 어림. 10만 토큰 아래라 낮은 요금표다)
@@ -47,7 +46,7 @@ category: 이 레포의 분야 하나를 목록에서 고른다.
 - 그 밖에는 무엇으로 만들었는지가 아니라 이 레포가 무엇인지로 고른다.
 - 목록의 어디에도 맞지 않으면 unclassified를 고른다.
 
-summary: 이 레포가 무엇이고 어떤 사람에게 쓸모 있는지 한국어 한 문장. {AIM_SUMMARY}자 이내. 링크와 HTML을 넣지 않는다. README에 없는 말을 지어내지 않는다.
+summary: 이 레포가 무엇이고 누가 쓰는지 한국어 개조식 한 줄. {AIM_SUMMARY}자 안팎. 명사로 끝내고 마침표를 찍지 않는다. 나눌 때는 " · "를 쓴다. "쓸모 있다" 같은 맺음말을 붙이지 않는다. 링크와 HTML을 넣지 않는다. README에 없는 말을 지어내지 않는다.
 
 evidence: summary와 category의 근거가 되는 README 본문 문장 1~3개. 이름 · 설명 · 토픽이 아니라 README 안의 한 문장을 글자 그대로 복사한다. 번역하거나 줄이거나 이어 붙이면 코드 대조에서 떨어진다.
 
@@ -79,7 +78,7 @@ def _verify(said, readme, notes):
     original = _flat(readme[:README_CHARS])
     evidence = [_flat(e) for e in said["evidence"]]    # 대조한 글자만 저장한다
     for e in evidence:
-        if len(e) < MIN_EVIDENCE or e not in original:
+        if len(e.encode(errors="replace")) < MIN_EVIDENCE or e not in original:
             raise ValueError(f"근거 대조 실패: {e[:120]!r}")   # !r: NUL · 깨진 유니코드는 저장이 터져 쓴 돈이 장부에 안 남는다
     summary = said["summary"].strip()
     if (len(summary) > MAX_SUMMARY or not _HANGUL.search(summary) or "<" in summary or _LINK.search(summary)
@@ -121,9 +120,9 @@ def _closed(conn, now, started):
 def _todo(conn, now):
     """순위에 든 레포 중 최신 README의 AI판이 없는 것의 코드판 행, 순위 순으로."""
     a = db.analyses
-    ids = [i["id"] for i in trending(conn, limit=RANKED)]
+    ids = ranked(conn)
     code = latest_ok(conn, ids)
-    # ponytail: 관문에 계속 떨어지는 README는 하루 한 번씩 돈을 쓴다. 순위 50개 × 1건이 천장이고 하루 상한 안이다
+    # ponytail: 관문에 계속 떨어지는 README는 하루 한 번씩 돈을 쓴다. 두 탭 100개 × 1건이 천장이고 하루 상한 안이다
     done = conn.execute(select(a.c.repo_id, a.c.readme_sha).where(
         a.c.method == AI_METHOD, a.c.repo_id.in_(ids), or_(a.c.ok, a.c.checked_at > now - RECHECK))).all()
     return [code[i] for i in ids if i in code and (i, code[i]["readme_sha"]) not in set(map(tuple, done))]

@@ -67,7 +67,7 @@ def rising(conn, limit=50):
         .order_by(gained.desc(), r.c.id).limit(limit)
     ).mappings()
     return latest, [{
-        "rank": i, "full_name": row["full_name"], "url": row["html_url"], "description": row["description"],
+        "rank": i, "id": row["id"], "full_name": row["full_name"], "url": row["html_url"], "description": row["description"],
         "language": row["language"], "stars": row["stars"], "gained": row["gained"],
         "days": max(round((latest - row["since"]).total_seconds() / 86400), 1),
     } for i, row in enumerate(rows, 1)]

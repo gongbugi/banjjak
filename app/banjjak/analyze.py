@@ -17,6 +17,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from banjjak import db
 from banjjak.heartbeat import ping
+from banjjak.rising import rising
 from banjjak.trending import trending
 
 # code-v1 → code-v2 (2026-10-21): 운영 첫 분석 50개에서 본 알아둘 점 오탐(부정문 · 보안 신고 안내 ·
@@ -26,7 +27,9 @@ METHOD = "code-v3"
 # 카드 AI (banjjak.cardai). 프롬프트를 고치면 올린다
 # ai-v1 → ai-v2 (2026-10-31, 운영 전): 평가에서 관문 통과가 17/35였다. 후보 문장을 번호 대신 종류 이름으로 고르고,
 # 근거 대조는 마크다운 표시를 뺀 글자로, 요약은 더 짧게 부른다. 분야 프롬프트는 그대로다 (정답지를 보고 고치지 않는다)
-AI_METHOD = "ai-v2"
+# ai-v2 → ai-v3 (2026-11-01, 운영 첫 48개): 요약이 거의 다 "~다."로 끝나고 "쓸모 있다"가 되풀이됐다. 개조식으로 더 짧게 부른다.
+# 근거 길이는 바이트로 잰다 (중국어 11자 문장이 낱말로 몰려 떨어졌다). 분야 프롬프트는 그대로다
+AI_METHOD = "ai-v3"
 RANKED = 50                      # 화면에 보이는 순위만 분석한다
 RECHECK = timedelta(days=1)      # README가 바뀌었나는 하루 한 번까지만 본다
 MAX_README = 300_000             # 아주 긴 README는 앞부분만 저장 · 분석한다
@@ -214,12 +217,17 @@ def _record_failure(conn, repo_id, now, error):
                                             ok=False, error=error))
 
 
+def ranked(conn):
+    """카드를 만들 레포: 두 탭의 순위. 돈이나 마감이 모자라면 앞쪽부터 채우니 새로 생긴 레포가 먼저다."""
+    return list(dict.fromkeys(i["id"] for i in trending(conn, limit=RANKED) + rising(conn, RANKED)[1]))
+
+
 def analyze_once(fetch_readme, conn, now):
     """순위에 든 레포 중 처음 보거나 하루가 지난 것만 README를 본다. (분석 수, 실패 수)를 돌려준다."""
     a = db.analyses
     analyzed = failed = 0
-    for item in trending(conn, limit=RANKED):
-        repo = conn.execute(select(db.repos).where(db.repos.c.id == item["id"])).mappings().one()
+    for repo_id in ranked(conn):
+        repo = conn.execute(select(db.repos).where(db.repos.c.id == repo_id)).mappings().one()
         last = conn.execute(select(a).where(a.c.repo_id == repo["id"], a.c.method == METHOD)
                             .order_by(a.c.checked_at.desc()).limit(1)).mappings().first()
         if last and now - last["checked_at"] < RECHECK:

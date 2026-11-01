@@ -100,6 +100,14 @@ def test_weekly_tally_counts_new_entrants_against_last_week():
     assert tally == [("dev-tools", 1, 1), ("creative", 1, 0), ("unclassified", 2, 0)]
 
 
+def test_weekly_tally_leaves_out_old_repos_only_the_rising_tab_ranked():
+    old = {**_item(2, "o/old", [], 30_000), "created_at": "2020-01-01T00:00:00Z"}
+    with db.engine().begin() as conn:
+        collect_once(lambda q, p: {"items": [_item(1, "o/new", [], 100), old] if p == 1 else []}, conn, NOW)
+        conn.execute(insert(db.analyses), [_analysis(1, NOW), _analysis(2, NOW)])
+        assert [(t["slug"], t["this_week"]) for t in weekly_tally(conn, NOW)] == [("dev-tools", 1)]
+
+
 def test_success_ratio_metric(monkeypatch):
     monkeypatch.setattr(main, "_now", lambda: NOW)
     assert "banjjak_analysis_success_ratio " not in generate_latest(REGISTRY).decode()   # 분석이 없으면 안 낸다

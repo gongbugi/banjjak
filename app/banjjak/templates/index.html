@@ -130,7 +130,7 @@
     <div class="about">
       <p class="basis">{{ basis or "아직 수집 전이에요" }}</p>
       {% if view %}
-      <p class="note">별 2만 이상인 레포와 최근 120일 안에 생겨 별 1천을 넘긴 레포를 하루 한 번 재서, 7일 동안 별이 많이 는 순서예요. 7일이 쌓이기 전에는 쌓인 날만큼 보여 줘요.</p>
+      <p class="note">최근 7일 동안 별이 많이 는 순서예요. 오래된 레포는 별 2만부터 세요.</p>
       {% else %}
       <p class="note">최근 30일 안에 생긴 레포 중 별이 빨리 느는 순서예요. 오래된 레포는 지금 뜨는 레포 탭에서 봐요.</p>
       {% endif %}
@@ -167,8 +167,8 @@
 <a class="name" href="{{ r.url }}">{{ r.full_name }}</a>
 {% if view %}<span class="gain">{{ r.days }}일 <b>{{ "{:+,}".format(r.gained) }}</b></span>{% else %}<span class="gain">하루 <b>{{ "{:+,.1f}".format(r.stars_per_day) }}</b>{% if r.estimated %} <span class="est">(첫 기록이라 생성 후 평균)</span>{% elif r.observed_hours < 23 %} <span class="est">({{ r.observed_hours }}시간 관측)</span>{% endif %}</span>{% endif %}
 </div>
-{% if r.card and r.card.summary %}<p class="desc"><span class="tag">AI 요약</span>{{ r.card.summary }}</p>{% endif %}
-{% if r.description %}<p class="desc">{{ r.description }}</p>{% endif %}
+{% if r.card and r.card.summary %}<p class="desc"><span class="tag">AI</span>{{ r.card.summary }}</p>
+{% elif r.description %}<p class="desc">{{ r.description }}</p>{% endif %}
 <p class="facts">
 {% if r.card %}<span class="field">{{ r.card.category_name }}</span>{% endif %}
 {% if r.language %}<span>{{ r.language }}</span>{% endif %}
@@ -176,7 +176,7 @@
 </p>
 {% if r.card %}
 <details>
-<summary>{{ "설치 명령" if r.card.usage else "설치 방법 없음" }}{% if r.card.notes %} · 알아둘 점 {{ r.card.notes | length }}{% endif %}{% if r.related %} · 같은 분야 {{ r.related | length }}{% endif %}</summary>
+<summary>{{ "설치 명령" if r.card.usage else "설치 방법 없음" }}{% if r.card.notes %} · 알아둘 점 {{ r.card.notes | length }}{% endif %}{% if r.related %} · 같은 분야 {{ r.related | length }}{% endif %}{% if r.card.summary and r.description %} · 원문 설명{% endif %}</summary>
 <dl class="card">
 <dt>설치</dt>
 <dd>{% if r.card.usage %}<pre><code>{{ r.card.usage }}</code></pre>{% else %}<span class="missing">README에 없음</span>{% endif %}</dd>
@@ -187,6 +187,10 @@
 {% if r.related %}
 <dt>같은 분야</dt>
 <dd class="related">{% for name in r.related %}<a href="https://github.com/{{ name }}">{{ name }}</a>{% endfor %}</dd>
+{% endif %}
+{% if r.card.summary and r.description %}
+<dt>원문 설명</dt>
+<dd>{{ r.description }}</dd>
 {% endif %}
 </dl>
 </details>

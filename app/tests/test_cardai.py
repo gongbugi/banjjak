@@ -13,6 +13,7 @@ from banjjak import analyze, cardai, db, llm, main
 from banjjak.analyze import AI_METHOD, METHOD, analyze_once
 from banjjak.cards import success_ratio
 from banjjak.collect import collect_once
+from banjjak.rising import save
 
 client = TestClient(main.app)
 NOW = datetime(2026, 10, 31, 12, 20, tzinfo=timezone.utc)
@@ -98,6 +99,34 @@ def test_page_shows_the_summary_escaped():
     assert "작은 &amp; 빠른 도구" in client.get("/").text
 
 
+def test_summary_takes_the_descriptions_place_and_the_original_folds_away():
+    seed()
+    cardai.enrich_once(Fake(good()), NOW)
+    main._cache.clear()
+    page = client.get("/").text
+    assert page.index("작은 서비스를 설정 파일") < page.index("<details>") < page.index("a/rocket desc")
+
+
+def test_rising_tab_repos_get_the_same_cards():
+    seed()
+    old = {"id": 2, "full_name": "x/old", "html_url": "https://github.com/x/old", "description": "x/old desc",
+           "language": "Go", "stargazers_count": 30_000, "created_at": "2020-01-01T00:00:00Z"}
+    with db.engine().begin() as conn:
+        save(conn, {2: old}, NOW - timedelta(days=2))
+        save(conn, {2: {**old, "stargazers_count": 30_900}}, NOW)
+        analyze_once(lambda name: {"sha": "s2", "content": ROCKET}, conn, NOW)
+    assert cardai.enrich_once(Fake(good(), good()), NOW) == (2, 0)     # 새로 생긴 레포 순위가 먼저, 지금 뜨는 레포가 뒤
+    main._cache.clear()
+    page = client.get("/?view=rising").text
+    assert page.index("작은 서비스를 설정 파일") < page.index("<details>") < page.index("x/old desc")
+
+
+def test_card_without_a_summary_keeps_the_description_in_view():
+    seed()
+    page = client.get("/").text
+    assert page.index("a/rocket desc") < page.index("<details>")
+
+
 @pytest.mark.parametrize("keep", [[], ["limits"]], ids=["none", "kind_not_among_candidates"])
 def test_keep_only_removes_code_sentences(keep):
     seed()
@@ -108,6 +137,12 @@ def test_keep_only_removes_code_sentences(keep):
 def test_evidence_is_matched_through_markup_and_line_breaks():
     seed(readme="# rocket\n\n**Rocket** launches [small services](https://x.dev/a_b) from\na <b>single</b> `config` file.\n")
     assert cardai.enrich_once(Fake(good()), NOW) == (1, 0)
+
+
+def test_short_chinese_sentence_is_long_enough_to_be_evidence():
+    line = "中文数学教材的知识体系"        # 영어 낱말 하나 길이의 글자 수로 한 문장을 쓴다: 11자 33바이트
+    seed(readme=f"# 수학\n\n{line}\n")
+    assert cardai.enrich_once(Fake(good(evidence=[line])), NOW) == (1, 0)
 
 
 def test_markup_is_stripped_in_linear_time():
@@ -194,6 +229,16 @@ def test_total_cap_stops_before_the_call_after_the_day_has_passed():
     seed()
     with db.engine().begin() as conn:
         conn.execute(db.analyses.insert().values(repo_id=1, method=AI_METHOD, analyzed_at=NOW - timedelta(days=5),
+                                                 checked_at=NOW, ok=False, readme_sha="old", cost=llm.CAPS["card"]["total"]))
+    fake = Fake(good())
+    assert cardai.enrich_once(fake, NOW) == (0, 0)
+    assert fake.requests == []
+
+
+def test_caps_count_what_earlier_prompt_versions_spent():
+    seed()
+    with db.engine().begin() as conn:
+        conn.execute(db.analyses.insert().values(repo_id=1, method="ai-v1", analyzed_at=NOW - timedelta(days=5),
                                                  checked_at=NOW, ok=False, readme_sha="old", cost=llm.CAPS["card"]["total"]))
     fake = Fake(good())
     assert cardai.enrich_once(fake, NOW) == (0, 0)

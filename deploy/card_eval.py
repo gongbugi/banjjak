@@ -74,6 +74,7 @@ def main():
     picked = [r for r in rows if r["sampled"]]
     worth = {**{k: a["notes"] for k, a in key["answers"].items()}, **key["extra_notes"]}
     cost, tokens = sum(r["ai"]["cost"] for r in rows), sum(r["ai"]["tokens"] for r in rows)
+    said = sorted((r["ai"]["summary"] for r in rows if r["ai"]["ok"]), key=len)
     report = "\n".join([
         f"{AI_METHOD} · 모델 {cardai.MODEL} · effort {cardai.EFFORT}",
         f"커버율 (관문 통과): {sum(r['ai']['ok'] for r in rows)}/{len(rows)}",
@@ -81,6 +82,8 @@ def main():
         f"코드판 미분류: {score([r for r in picked if r['code']['category'] == 'unclassified'], key['answers'])}",
         f"코드판 분류됨: {score([r for r in picked if r['code']['category'] != 'unclassified'], key['answers'])}",
         f"알아둘 점: {sentences(rows, worth)}",
+        f"요약 {len(said)}개: 길이 중앙값 {len(said[len(said) // 2])}자 · 최장 {len(said[-1])}자"
+        f" · '다'로 끝남 {sum(s.rstrip('.').endswith('다') for s in said)} · 마침표 {sum(s.endswith('.') for s in said)}",
         f"비용: 합계 ${cost:.4f} · 카드당 {tokens / len(rows):,.0f}토큰 · ${cost / len(rows):.5f} · {cost / len(rows) * WON:.1f}원"
         f" · 하루 {DAILY}건이면 월 {cost / len(rows) * DAILY * 30 * WON:,.0f}원",
         f"레포별 결과: {path} (재채점을 마치기 전에는 열지 않는다)"])
