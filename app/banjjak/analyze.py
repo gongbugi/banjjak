@@ -279,8 +279,9 @@ def main():
     print(f"analyzed {n}, failed {failed}")
     ping(os.environ.get("HEARTBEAT_URL"))   # "돌았다"는 신호. 레포별 실패는 성공률 규칙이 본다
     if os.environ.get("ANTHROPIC_API_KEY"):  # 없으면 코드판 카드만. 코드판과 신호가 끝난 뒤라 AI가 멈춰도 분석기 장애가 아니다
-        from banjjak import cardai           # cardai가 이 모듈을 불러온다
+        from banjjak import cardai, flows    # cardai가 이 모듈을 불러온다
         cardai.main()
+        flows.main()                         # 카드 AI 요약을 읽으므로 그 뒤에. 탭마다 하루 한 번
 
 
 if __name__ == "__main__":

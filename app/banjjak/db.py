@@ -63,6 +63,19 @@ analyses = Table(
     Column("cost", Float),
 )
 
+# 흐름 묶음 (banjjak.flows). 탭(view)마다 하루 한 번 쌓는다. 소속은 레포 id라 순위가 바뀌어도 그대로다
+flows = Table(
+    "flows", metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("view", Text, nullable=False),                             # new · rising
+    Column("made_at", TIMESTAMP(timezone=True), nullable=False),
+    Column("ok", Boolean, nullable=False),
+    Column("error", Text),
+    Column("groups", JSONB, nullable=False, server_default="[]"),     # [{name, line, keywords, members: [레포 id]}]
+    Column("tokens", Integer),
+    Column("cost", Float),
+)
+
 
 @lru_cache
 def engine():

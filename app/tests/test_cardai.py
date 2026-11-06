@@ -311,14 +311,16 @@ def test_eval_counts_a_failed_call_as_the_code_card():
         "문장": 2, "코드판 yes": 1, "AI 남김": 1, "AI 남김 yes": 0, "AI가 뺀 yes": 1}
 
 
-@pytest.mark.parametrize("key,calls", [("", ["ping"]), ("sk-test", ["ping", "enrich"])])
+@pytest.mark.parametrize("key,calls", [("", ["ping"]), ("sk-test", ["ping", "enrich", "flows"])])
 def test_analyzer_pings_first_and_skips_ai_without_a_key(monkeypatch, key, calls):
+    from banjjak import flows
     seen = []
     monkeypatch.setenv("GITHUB_TOKEN", "t")
     monkeypatch.setenv("ANTHROPIC_API_KEY", key)
     monkeypatch.setattr(analyze, "analyze_once", lambda *a: (0, 0))
     monkeypatch.setattr(analyze, "ping", lambda url: seen.append("ping"))
     monkeypatch.setattr(cardai, "main", lambda: seen.append("enrich"))
+    monkeypatch.setattr(flows, "main", lambda: seen.append("flows"))
     analyze.main()
     assert seen == calls
 

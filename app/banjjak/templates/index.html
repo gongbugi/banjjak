@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% if field_name %}{{ field_name }} | {% endif %}{% if view %}전체 레포 | {% endif %}반짝 | 지금 뜨는 GitHub 레포</title>
+  <title>{% if flow %}{{ flow.name }} | {% endif %}{% if field_name %}{{ field_name }} | {% endif %}{% if view %}전체 레포 | {% endif %}반짝 | 지금 뜨는 GitHub 레포</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;600&display=swap" rel="stylesheet">
@@ -98,6 +98,17 @@
     .related { display: flex; flex-wrap: wrap; gap: .1rem 1rem; }
     .empty { margin: 0; padding: 1.25rem 0; border-top: 1px solid var(--rule); color: var(--muted); }
 
+    /* 지금 뜨는 흐름: 줄 전체가 그 흐름의 레포만 남기는 링크 (?flow=). 고른 줄은 오늘 처음 든 레포 행처럼 금색 선 */
+    .flows { margin-bottom: 2.5rem; }
+    .flows ul { list-style: none; margin: .9rem 0 0; padding: 0; }
+    .flows a { display: block; padding: .8rem .75rem; border-top: 1px solid var(--rule); text-decoration: none; }
+    .flows a:hover { background: var(--card); }
+    .flows a[aria-current] { background: var(--card); box-shadow: inset 3px 0 0 var(--star); }
+    .flows b { font-size: 1.06rem; font-weight: 600; }
+    .flows .stat { color: var(--muted); font-size: .875rem; }
+    .flows .line { display: block; margin-top: .1rem; }
+    .flows .members { display: block; margin-top: .15rem; color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; }
+
     /* 오늘 새로 든 레포: 줄 전체가 순위의 그 행으로 가는 링크 */
     .fresh .sum { margin: .4rem 0 0; color: var(--muted); font-size: .94rem; }
     .fresh .sum b { color: var(--ink); font-family: var(--mono); }
@@ -147,13 +158,32 @@
 
   <div class="columns">
   <section class="ranking" aria-labelledby="rank-title">
+    {% if flows %}
+    <section class="flows" aria-labelledby="flow-title">
+      <div class="title">
+        <h2 id="flow-title">지금 뜨는 흐름</h2>
+        <p class="count">순위 {{ total }}개 중 {{ flows | map(attribute="repos") | map("length") | sum }}개</p>
+      </div>
+      <p class="note">비슷한 레포가 여럿 함께 뜨면 한 줄로 묶었어요. 줄을 누르면 순위에 그 레포만 남아요.</p>
+      <ul>
+      {% for g in flows %}
+      {% set here = flow and flow.key == g.key %}
+<li><a href="{% if here %}/{% if view %}?view=rising{% endif %}{% else %}/?{% if view %}view=rising&amp;{% endif %}flow={{ g.key }}#rank-title{% endif %}"{% if here %} aria-current="true"{% endif %}>
+<span class="head"><b>{{ g.name }}</b><span class="stat">레포 {{ g.repos | length }}개 · {{ span }} {{ "{:+,.0f}".format(g.gain) }} · 최고 {{ g.best }}위{% if g.fresh %} · 오늘 새로 {{ g.fresh }}{% endif %}</span></span>
+<span class="line">{{ g.line }}</span>
+<span class="members">{% for r in g.repos %}{{ r.full_name.split("/")[1] }}{% if not loop.last %} · {% endif %}{% endfor %}</span>
+</a></li>
+      {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
     <div class="title">
       <h2 id="rank-title">{{ span }} 별 증가 순위</h2>
-      <p class="count">{% if field_name %}{{ field_name }} {{ items | length }}개{% else %}레포 {{ total }}개{% endif %}</p>
+      <p class="count">{% if flow %}{{ flow.name }} {{ items | length }}개{% elif field_name %}{{ field_name }} {{ items | length }}개{% else %}레포 {{ total }}개{% endif %}</p>
     </div>
     {% if fields %}
     <nav class="fields" aria-label="분야별 보기">
-      <a href="/{% if view %}?view=rising{% endif %}"{% if not field %} aria-current="page"{% endif %}>전체<span class="n">{{ total }}</span></a>
+      <a href="/{% if view %}?view=rising{% endif %}"{% if not field and not flow %} aria-current="page"{% endif %}>전체<span class="n">{{ total }}</span></a>
       {% for f in fields %}
       <a href="/?{% if view %}view=rising&amp;{% endif %}field={{ f.slug }}"{% if f.slug == field %} aria-current="page"{% endif %}>{{ f.name }}<span class="n">{{ f.count }}</span></a>
       {% endfor %}
@@ -239,6 +269,7 @@
   <footer>
     분야, 요약, 알아둘 점은 AI나 정해진 규칙이 README를 읽어 뽑았어요. 틀릴 수 있으니 원문도 확인해 주세요.
     알아둘 점은 README 문장을 그대로 옮긴 것이에요.
+    지금 뜨는 흐름은 AI가 순위의 한 줄 설명을 읽어 묶었고, 레포 수와 별 수는 지금 순위로 세요.
   </footer>
 </main>
 </body>

@@ -19,7 +19,7 @@ from sqlalchemy import text
 
 from banjjak import db
 from banjjak.analyze import CATEGORY_NAMES
-from banjjak.cards import KST, ai_usage, attach_cards, attach_entry, success_ratio, weekly_tally
+from banjjak.cards import KST, ai_usage, attach_cards, attach_entry, flows_shown, success_ratio, weekly_tally
 from banjjak.probe import USER_AGENT as PROBE_AGENT
 from banjjak.rising import entrants, rising
 from banjjak.trending import latest_capture, trending
@@ -122,10 +122,11 @@ def _ai_usage(key):
     return used and used[key]
 
 
-# 카드 AI (#19). 실패는 코드판 카드로 넘어가므로 분석 성공률(SLI)과 따로 잰다
-for key, about in {"ok": "card AI calls that passed the gates in the last 24h", "failed": "card AI calls that failed in the last 24h",
-                   "tokens": "card AI tokens in the last 24h", "cost_day_dollars": "card AI spend in the last 24h",
-                   "cost_dollars": "card AI spend in total"}.items():
+# 카드 AI (#19)와 흐름 묶음 (같은 장부 · 상한). 실패는 코드판 카드 · 흐름 없는 화면으로 넘어가므로 분석 성공률(SLI)과 따로 잰다
+for key, about in {"ok": "card AI and flow calls that passed the gates in the last 24h",
+                   "failed": "card AI and flow calls that failed in the last 24h",
+                   "tokens": "card AI and flow tokens in the last 24h", "cost_day_dollars": "card AI and flow spend in the last 24h",
+                   "cost_dollars": "card AI and flow spend in total"}.items():
     REGISTRY.register(_DbGauge(f"banjjak_card_ai_{key}", about, lambda key=key: _ai_usage(key)))
 
 
@@ -199,12 +200,17 @@ def api_trending():
     return Response(_cached("api", _api_body), media_type="application/json")
 
 
+FLOW_KEYS = {str(n) for n in range(1, 6)}   # 흐름은 탭마다 5개까지 (banjjak.flows)
+
+
 @app.get("/", dependencies=[Depends(_fault)])
-def index(request: Request, field: str | None = None, view: str | None = None):
-    # 분야 · 보기는 정해진 목록에서만 받는다. 모르는 값은 전체로 → 캐시 칸도 아는 분야만큼만 생긴다
-    field = field if field in CATEGORY_NAMES else None
+def index(request: Request, field: str | None = None, view: str | None = None, flow: str | None = None):
+    # 분야 · 흐름 · 보기는 정해진 목록에서만 받는다. 모르는 값은 전체로 → 캐시 칸도 아는 값만큼만 생긴다. 흐름을 고르면 분야는 안 본다
+    flow = flow if flow in FLOW_KEYS else None
+    field = field if field in CATEGORY_NAMES and not flow else None
     page, build = ("rising", _rising_body) if view == "rising" else ("index", _index_body)
-    return HTMLResponse(_cached(f"{page}:{field}" if field else page, lambda: build(request, field)))
+    key = page + (f":{field}" if field else "") + (f":flow{flow}" if flow else "")
+    return HTMLResponse(_cached(key, lambda: build(request, field, flow)))
 
 
 def _basis_text(at):
@@ -227,27 +233,39 @@ def _by_field(items, field):
     return fields, [i for i in items if field is None or (i["card"] and i["card"]["category"] == field)]
 
 
-def _rising_body(request, field):
+def _pick(items, flows, field, flow):
+    """분야 칩 · 흐름 · 보여 줄 목록. 흐름을 골랐으면 그 흐름의 레포만, 아니면 분야로 거른다."""
+    picked = next((g for g in flows if g["key"] == flow), None)
+    fields, shown = _by_field(items, field)
+    return {"fields": fields, "flows": flows, "flow": picked, "items": picked["repos"] if picked else shown,
+            "field": field, "field_name": CATEGORY_NAMES.get(field)}
+
+
+def _rising_body(request, field, flow):
     with db.engine().connect() as conn:
         updated, items = rising(conn)
         attach_cards(conn, items)
         new = entrants(conn, updated, items)
+        flows = flows_shown(conn, "rising", items, "gained", new, updated) if updated else []
     _shine(items, "gained")
-    fields, shown = _by_field(items, field)
+    picked = _pick(items, flows, field, flow)
     days = items[0]["days"] if items else 1
     return templates.TemplateResponse(request, "index.html", {
-        "basis": _basis_text(updated), "items": shown, "total": len(items), "fields": fields,
-        "field": field, "field_name": CATEGORY_NAMES.get(field), "view": "rising",
-        "span": "하루" if days == 1 else f"{days}일", "fresh": [i for i in shown if i["id"] in new]}).body
+        "basis": _basis_text(updated), "total": len(items), "view": "rising", **picked,
+        "span": "하루" if days == 1 else f"{days}일", "fresh": [i for i in picked["items"] if i["id"] in new]}).body
 
 
-def _index_body(request, field):
+def _index_body(request, field, flow):
     updated_at, items, _ = _snapshot()
-    basis_text = _basis_text(datetime.fromisoformat(updated_at) if updated_at else None)
+    updated = datetime.fromisoformat(updated_at) if updated_at else None
+    basis_text = _basis_text(updated)
+    flows = []
+    if updated:
+        with db.engine().connect() as conn:
+            flows = flows_shown(conn, "new", items, "stars_per_day", {i["id"] for i in items if i["entry_day"] == 1}, updated)
     _shine(items, "stars_per_day")
-    fields, shown = _by_field(items, field)
-    # 템플릿은 요청(주소 · 헤더)을 쓰지 않는다. 분야는 캐시 키에 든다 → 같은 키면 누구에게나 같은 HTML
+    picked = _pick(items, flows, field, flow)
+    # 템플릿은 요청(주소 · 헤더)을 쓰지 않는다. 분야 · 흐름은 캐시 키에 든다 → 같은 키면 누구에게나 같은 HTML
     return templates.TemplateResponse(request, "index.html", {
-        "basis": basis_text, "items": shown, "total": len(items), "fields": fields,
-        "field": field, "field_name": CATEGORY_NAMES.get(field), "span": "하루",
-        "fresh": [i for i in shown if i["entry_day"] == 1]}).body
+        "basis": basis_text, "total": len(items), "span": "하루", **picked,
+        "fresh": [i for i in picked["items"] if i["entry_day"] == 1]}).body

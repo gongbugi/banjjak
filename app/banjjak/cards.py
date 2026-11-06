@@ -1,7 +1,7 @@
 """카드: 분석 결과를 순위에 붙이고, 이번 주 분야별 집계를 낸다. 숫자는 전부 코드가 DB에서 계산한다."""
 from datetime import timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, union_all
 from sqlalchemy.dialects.postgresql import distinct_on
 
 from banjjak import db
@@ -90,11 +90,35 @@ def success_ratio(conn, now):
 
 
 def ai_usage(conn, now):
-    """카드 AI의 최근 24시간 호출 · 토큰과 비용. 상한과 지표가 함께 본다 (키는 지표 이름). 분석기는 금방 끝나서 DB가 장부다."""
-    a = db.analyses
-    day = a.c.analyzed_at > now - timedelta(hours=24)
+    """카드 AI와 흐름 묶음의 최근 24시간 호출 · 토큰과 비용. 상한과 지표가 함께 본다 (키는 지표 이름). 분석기는 금방 끝나서 DB가 장부다."""
+    a, f = db.analyses, db.flows
+    calls = union_all(select(a.c.analyzed_at.label("at"), a.c.ok, a.c.tokens, a.c.cost)
+                      .where(a.c.method.like("ai-%")),    # 프롬프트 버전을 올려도 쓴 돈은 그대로 센다
+                      select(f.c.made_at, f.c.ok, f.c.tokens, f.c.cost)).subquery()
+    day = calls.c.at > now - timedelta(hours=24)
     ok, failed, tokens, cost_day, cost = conn.execute(
-        select(func.count().filter(day, a.c.ok), func.count().filter(day, ~a.c.ok), func.coalesce(func.sum(a.c.tokens).filter(day), 0),
-               func.coalesce(func.sum(a.c.cost).filter(day), 0), func.coalesce(func.sum(a.c.cost), 0))
-        .where(a.c.method.like("ai-%"))).one()    # 프롬프트 버전을 올려도 쓴 돈은 그대로 센다
+        select(func.count().filter(day, calls.c.ok), func.count().filter(day, ~calls.c.ok),
+               func.coalesce(func.sum(calls.c.tokens).filter(day), 0),
+               func.coalesce(func.sum(calls.c.cost).filter(day), 0), func.coalesce(func.sum(calls.c.cost), 0))).one()
     return {"ok": ok, "failed": failed, "tokens": tokens, "cost_day_dollars": cost_day, "cost_dollars": cost}
+
+
+FLOW_FOR = timedelta(days=2)   # 보여 주는 순위보다 이만큼 묵은 흐름은 안 보인다 (분석기가 멈췄을 때)
+FLOW_MIN = 3                   # 레포 이만큼이 함께 떠야 흐름이다 (banjjak.flows도 이 값으로 고른다)
+
+
+def flows_shown(conn, view, items, gain, fresh, at):
+    """그 탭의 최근 흐름 중 지금 순위에 3개 이상 남은 것. 숫자(개수 · 별 합 · 최고 순위 · 새로 든 수)는 지금 순위로 센다.
+    key는 저장된 순서라 하루 동안 그대로다 (?flow= 주소). 별 합이 큰 흐름부터."""
+    f = db.flows
+    groups = conn.execute(select(f.c.groups).where(f.c.view == view, f.c.ok, f.c.made_at > at - FLOW_FOR)
+                          .order_by(f.c.made_at.desc()).limit(1)).scalar() or []
+    out = []
+    for key, g in enumerate(groups, 1):
+        ids = set(g["members"])
+        members = [i for i in items if i["id"] in ids]
+        if len(members) >= FLOW_MIN:
+            out.append({"key": str(key), "name": g["name"], "line": g["line"], "repos": members,
+                        "gain": sum(i[gain] for i in members), "best": members[0]["rank"],
+                        "fresh": sum(i["id"] in fresh for i in members)})
+    return sorted(out, key=lambda g: -g["gain"])
