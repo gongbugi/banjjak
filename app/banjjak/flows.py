@@ -20,7 +20,8 @@ from banjjak.trending import trending
 
 MODEL = "claude-haiku-5-5"
 EFFORT = "medium"
-MAX_TOKENS = 4000
+MAX_TOKENS = 8000             # 생각 토큰도 이 안에 든다. 4000이면 11-07 전체 레포 탭이 잘렸다 (출력 약 3.3 ~ 4천)
+CALL_SECONDS = 45             # 출력이 길면 공용 30초를 넘는다. 두 탭 × 재시도 1번이어도 180초라 카드 AI 뒤 Job 마감 600초 안
 EVERY = timedelta(hours=23)   # 하루 한 번. 24시간이면 매시 Job이 하루에 한 시간씩 밀린다
 MAX_GROUPS = 5
 LINE_CHARS = 200              # 보내는 한 줄 설명의 길이. 핵심 말 대조도 이 글자로 한다
@@ -96,7 +97,8 @@ def make(client, items):
     tokens, cost = 0, WORST_CALL
     try:
         r = client.messages.create(
-            model=MODEL, max_tokens=MAX_TOKENS, system=SYSTEM, messages=[{"role": "user", "content": _prompt(items)}],
+            model=MODEL, max_tokens=MAX_TOKENS, timeout=CALL_SECONDS, system=SYSTEM,
+            messages=[{"role": "user", "content": _prompt(items)}],
             output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": ANSWER}})
         counts, cost = llm.cost_of(MODEL, r.usage)
         tokens = sum(counts)
