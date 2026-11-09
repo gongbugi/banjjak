@@ -6,7 +6,6 @@ AI판과 비교할 기준선은 AI를 붙이기 직전의 코드판 버전이다
 """
 import base64
 import json
-import os
 import re
 import urllib.error
 import urllib.request
@@ -15,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
-from banjjak import db
+from banjjak import db, secret
 from banjjak.heartbeat import ping
 from banjjak.rising import rising
 from banjjak.trending import trending
@@ -275,10 +274,10 @@ def github_readme(token):
 
 def main():
     with db.engine().begin() as conn:
-        n, failed = analyze_once(github_readme(os.environ["GITHUB_TOKEN"]), conn, datetime.now(timezone.utc))
+        n, failed = analyze_once(github_readme(secret("GITHUB_TOKEN", required=True)), conn, datetime.now(timezone.utc))
     print(f"analyzed {n}, failed {failed}")
-    ping(os.environ.get("HEARTBEAT_URL"))   # "돌았다"는 신호. 레포별 실패는 성공률 규칙이 본다
-    if os.environ.get("ANTHROPIC_API_KEY"):  # 없으면 코드판 카드만. 코드판과 신호가 끝난 뒤라 AI가 멈춰도 분석기 장애가 아니다
+    ping(secret("HEARTBEAT_URL"))   # "돌았다"는 신호. 레포별 실패는 성공률 규칙이 본다
+    if secret("ANTHROPIC_API_KEY"):  # 없으면 코드판 카드만. 코드판과 신호가 끝난 뒤라 AI가 멈춰도 분석기 장애가 아니다
         from banjjak import cardai, flows    # cardai가 이 모듈을 불러온다
         cardai.main()
         flows.main()                         # 카드 AI 요약을 읽으므로 그 뒤에. 탭마다 하루 한 번

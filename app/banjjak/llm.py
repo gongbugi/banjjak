@@ -16,6 +16,7 @@ from datetime import timedelta
 
 from prometheus_client import Counter, Histogram
 
+from banjjak import secret
 from banjjak.actions import ACTIONS, KST
 from banjjak.checklist import (CAUSES, ENTRANCE, NS, REJECTED, _ago, _arriving, _cronjob, _hpa, _job_log, _last_job, _pods,
                                _surge, replay)
@@ -102,7 +103,7 @@ SYSTEM = f"""너는 GitHub 트렌딩 순위 서비스 banjjak의 운영 진단�
 @functools.cache
 def client():
     import anthropic   # 키가 있는 곳에서만 불러온다 (불러오는 데 1초 넘게 걸린다)
-    return anthropic.Anthropic(timeout=CALL_SECONDS, max_retries=RETRIES)
+    return anthropic.Anthropic(api_key=secret("ANTHROPIC_API_KEY"), timeout=CALL_SECONDS, max_retries=RETRIES)
 
 
 def judge(conn, alert, tape, now, client, ledger="live", model=MODEL, effort=EFFORT, thinking=None):

@@ -1,0 +1,9 @@
+[Unit]
+Description=banjjak analyzer: every hour at :20
+
+[Timer]
+OnCalendar=*-*-* *:20:00
+Unit=banjjak-job@analyzer.service
+
+[Install]
+WantedBy=timers.target

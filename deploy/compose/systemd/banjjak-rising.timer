@@ -1,0 +1,11 @@
+[Unit]
+Description=banjjak rising: daily 00:40 KST
+
+[Timer]
+OnCalendar=*-*-* 00:40:00 Asia/Seoul
+# 하루 한 번이라 VM이 꺼져 있어 놓친 실행은 켜질 때 따라잡는다. 매시 작업은 따라잡지 않는다 (부팅 때 한꺼번에 몰리지 않게, 다음 시각에 돈다)
+Persistent=true
+Unit=banjjak-job@rising.service
+
+[Install]
+WantedBy=timers.target

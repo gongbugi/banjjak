@@ -1,0 +1,9 @@
+[Unit]
+Description=banjjak collector: every hour at :00
+
+[Timer]
+OnCalendar=*-*-* *:00:00
+Unit=banjjak-job@collector.service
+
+[Install]
+WantedBy=timers.target

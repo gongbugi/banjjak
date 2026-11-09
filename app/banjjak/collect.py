@@ -1,13 +1,12 @@
 """수집기: 최근 생긴 레포 후보를 GitHub 검색으로 찾고, 별 개수를 기록한다. CronJob이 매시간 한 번 돌린다."""
 import json
-import os
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.dialects.postgresql import insert
 
-from banjjak import db
+from banjjak import db, secret
 from banjjak.heartbeat import ping
 
 WINDOW_DAYS = 30     # 최근 30일 안에 생긴 레포만 (오래된 레포의 급등은 못 잡는다)
@@ -78,9 +77,9 @@ def github_search(token):
 
 def main():
     with db.engine().begin() as conn:
-        n = collect_once(github_search(os.environ["GITHUB_TOKEN"]), conn, datetime.now(timezone.utc))
+        n = collect_once(github_search(secret("GITHUB_TOKEN", required=True)), conn, datetime.now(timezone.utc))
     print(f"collected {n} repos")
-    ping(os.environ.get("HEARTBEAT_URL"))   # 저장까지 끝났을 때만
+    ping(secret("HEARTBEAT_URL"))   # 저장까지 끝났을 때만
 
 
 if __name__ == "__main__":

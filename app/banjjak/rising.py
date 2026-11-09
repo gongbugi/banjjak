@@ -1,13 +1,12 @@
 """전체 레포 탭: 별 많은 레포와 최근 뜬 레포를 하루 한 번 재서 하루 증가순으로 보여 준다. CronJob이 하루 한 번 돌린다.
 수집기(최근 30일 · 매시간)와 표 · CronJob을 나눈다 → 신선도 SLI와 섞이지 않는다 (지표 하나에 원인 하나)."""
-import os
 import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 
-from banjjak import db
+from banjjak import db, secret
 from banjjak.collect import PER_PAGE, github_search, pages, save_repo
 
 BIG_STARS = 20_000
@@ -88,7 +87,7 @@ def entrants(conn, at, items):
 
 def main():
     now = datetime.now(timezone.utc)
-    found = candidates(paced(github_search(os.environ["GITHUB_TOKEN"])), now)   # 트랜잭션을 몇 분씩 열어 두지 않게 검색부터
+    found = candidates(paced(github_search(secret("GITHUB_TOKEN", required=True))), now)   # 트랜잭션을 몇 분씩 열어 두지 않게 검색부터
     with db.engine().begin() as conn:
         save(conn, found, now)
     print(f"recorded {len(found)} repos")

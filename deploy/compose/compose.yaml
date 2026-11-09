@@ -1,0 +1,177 @@
+# 11-20 뒤 앱 VM (Azure B2ats v2, 1GB)에서 k3s 대신 돈다. k3s는 1GB에 안 들어간다 (11-09 측정: k3s server만 RSS 625MB)
+# deploy/k8s/의 app · postgres · collector · analyzer · rising · backup을 옮겼다.
+# 운영 VM 것(장애 주입기 · 운영 AI · Prometheus · Alertmanager)과 Grafana는 넣지 않는다 (운영 VM은 11-20에 지운다)
+#
+# 올리기 (VM에서. CD를 compose용으로 바꾸는 것은 5주차):
+#   BANJJAK_SHA=<커밋 SHA> docker compose -f /opt/banjjak/compose.yaml up -d --wait
+# 비밀값: /etc/banjjak/secrets/<이름> 파일 하나에 값 하나 (git · 이미지 밖). 이름은 맨 아래 secrets: 목록
+#   폴더는 root 소유 · 권한 700, 파일은 444. compose(swarm 아님)는 붙인 파일의 uid · 권한을 못 바꿔서,
+#   컨테이너의 비루트 사용자가 읽으려면 파일이 444여야 한다. 호스트의 다른 사용자는 700 폴더에 막힌다 🟡 5주차에 실제로 확인
+#   서비스마다 필요한 파일만 /run/secrets/<이름>으로 붙고, 값은 환경 변수에 없다 (앱은 *_FILE을 읽는다: banjjak.secret)
+#   Key Vault로 옮길 때: 이 폴더에 tmpfs를 올리고 부팅 때 Key Vault 비밀을 같은 이름 파일로 쓴다. compose는 그대로
+# 작업(collector · analyzer · rising · backup)은 profiles: [job]이라 up에서 뜨지 않는다.
+#   호스트 systemd timer가 `docker compose run --rm <작업>`으로 부르고, 끝나면 컨테이너가 사라진다 (systemd/)
+# 메모리 상한 🟡: 동시에 뜨는 것(postgres + web + 작업 1개)의 합 640MB가 1GB에서 OS · Docker 몫을 뺀 안에 들게 어림했다. 5주차에 잰다
+name: banjjak
+
+x-logging: &logging
+  driver: local   # 돌려 쓴다 (기본 20MB × 5). 기본 json-file은 끝없이 쌓인다 (k3s에서는 kubelet이 돌려 썼다)
+
+x-banjjak: &banjjak
+  image: ghcr.io/gongbugi/banjjak:${BANJJAK_SHA:?BANJJAK_SHA (커밋 SHA)가 없다. latest는 쓰지 않는다}
+  read_only: true                          # k8s readOnlyRootFilesystem
+  security_opt: [no-new-privileges:true]   # k8s allowPrivilegeEscalation: false. 비루트(uid 10001)는 이미지가 정한다
+  mem_limit: 192m                          # 🟡 k8s 상한 256Mi. 11-09 측정 RSS web 70MB · 수집기 57MB
+  logging: *logging
+
+x-job: &job
+  <<: *banjjak
+  profiles: [job]
+  depends_on:
+    postgres: {condition: service_healthy}   # 부팅 직후 timer가 먼저 불러도 DB가 뜰 때까지 기다린다
+
+services:
+  # 포트는 호스트에 열지 않는다 (k8s Service처럼 안에서만)
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: banjjak
+      POSTGRES_DB: banjjak
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_PASSWORD_FILE: /run/secrets/db-password   # 이미지가 원래 *_FILE을 읽는다
+    secrets: [db-password]
+    volumes: [postgres:/var/lib/postgresql/data]
+    healthcheck:   # k8s readinessProbe
+      test: [CMD, pg_isready, -U, banjjak, -d, banjjak]
+      interval: 5s
+    mem_limit: 256m           # 🟡 k8s 상한 512Mi
+    stop_grace_period: 30s    # k8s 기본만큼 기다려 깨끗이 끈다 (Docker 기본 10초)
+    restart: unless-stopped
+    logging: *logging
+
+  # 스키마는 Alembic으로만 바꾼다 (k8s initContainer). up 때마다 돌고 끝난다
+  migrate:
+    <<: *banjjak
+    command: [alembic, upgrade, head]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/db-url
+    secrets: [db-url]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  # k8s에서 옮기지 않은 것:
+  #   HPA(최대 2개): 1GB라 하나만
+  #   preStop 10초: Traefik이 엔드포인트를 늦게 알던 틈을 메우던 것. Traefik이 없다. 대신 배포(재생성) 때 몇 초 끊긴다 🟡
+  #   장애 주입 ConfigMap(/etc/fault): 주입기가 운영 VM과 함께 사라진다. 파일이 없으면 스위치는 꺼진 것으로 본다 (main._read)
+  #   livenessProbe: Docker는 unhealthy를 다시 띄우지 않는다. 프로세스가 죽으면 restart가 다시 띄운다
+  # ponytail: 요청 제한(Traefik 초당 320)이 없다. 몰리면 web이 그대로 맞는다. 도메인 + Nginx 단계에서 limit_req로 되살린다
+  web:
+    <<: *banjjak
+    environment:
+      DATABASE_URL_FILE: /run/secrets/db-url
+    secrets: [db-url]
+    ports: ["80:8000"]   # 9100(지표)은 호스트에 열지 않는다
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:   # k8s readinessProbe (/readyz가 DB까지 본다). `up --wait`가 이것을 기다린다. 이미지에 curl이 없어 파이썬으로
+      test: [CMD, python, -c, "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+    restart: unless-stopped
+
+  # 매시 정각 (systemd/banjjak-collector.timer). timeout 600 = k8s activeDeadlineSeconds
+  collector:
+    <<: *job
+    command: [timeout, "600", python, -m, banjjak.collect]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/db-url
+      GITHUB_TOKEN_FILE: /run/secrets/github-token
+      HEARTBEAT_URL_FILE: /run/secrets/heartbeats-collector
+    secrets: [db-url, github-token, heartbeats-collector]
+
+  # 매시 20분 (systemd/banjjak-analyzer.timer)
+  analyzer:
+    <<: *job
+    command: [timeout, "600", python, -m, banjjak.analyze]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/db-url
+      GITHUB_TOKEN_FILE: /run/secrets/github-token
+      HEARTBEAT_URL_FILE: /run/secrets/heartbeats-analyzer
+      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic-api-key
+    secrets: [db-url, github-token, heartbeats-analyzer, anthropic-api-key]
+
+  # 매일 00:40 KST (systemd/banjjak-rising.timer)
+  rising:
+    <<: *job
+    command: [timeout, "600", python, -m, banjjak.rising]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/db-url
+      GITHUB_TOKEN_FILE: /run/secrets/github-token
+    secrets: [db-url, github-token]
+
+  # DB 백업: 매일 03:30 KST pg_dump → Azure Blob. 7일 보관은 Blob 수명 주기 규칙이 맡는다.
+  # systemd/banjjak-backup.service가 dump → upload를 차례로 부른다 (k8s initContainer → container).
+  # k8s activeDeadlineSeconds 900은 dump 600 + 올리기 300으로 나눴다
+  # dump는 컨테이너 안 root + 권한(capability) 전부 뺌: 새 이름 있는 볼륨은 root 소유로 생겨서 k8s처럼 uid 70이면 못 쓴다
+  backup-dump:
+    image: postgres:18-alpine
+    profiles: [job]
+    entrypoint: [sh, -c]
+    command:
+      - |
+        set -e
+        export PGPASSWORD="$$(cat /run/secrets/db-password)"
+        rm -f /dump/*
+        name="banjjak-$$(date -u +%Y%m%dT%H%M%SZ).dump"
+        timeout 600 pg_dump -h postgres -U banjjak -d banjjak -Fc -f "/dump/$$name"
+        echo "$$name" > /dump/NAME
+        echo "dumped $$name ($$(wc -c < "/dump/$$name") bytes)"
+    secrets: [db-password]
+    volumes: [backup-dump:/dump]
+    depends_on:
+      postgres: {condition: service_healthy}
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    mem_limit: 128m   # 🟡
+
+  # backup-blob 파일이 비면 올리기를 건너뛰고 성공으로 끝난다
+  backup-upload:
+    image: curlimages/curl:8.22.0
+    profiles: [job]
+    entrypoint: [sh, -c]
+    command:
+      - |
+        set -e
+        name=$$(cat /dump/NAME)
+        url=$$(cat /run/secrets/backup-blob-container-url)
+        if [ -z "$$url" ]; then echo "no backup-blob secret: skip upload"; exit 0; fi
+        curl --fail -sS --max-time 300 -X PUT -H "x-ms-blob-type: BlockBlob" \
+          --data-binary "@/dump/$$name" "$$url/$$name?$$(cat /run/secrets/backup-blob-sas)"
+        echo "uploaded $$name"
+        # 성공했을 때만 하트비트. 실패하면 신호가 끊겨 밖(Better Stack)에서 안다
+        ping=$$(cat /run/secrets/heartbeats-backup)
+        if [ -n "$$ping" ]; then curl --fail -sS -m 10 "$$ping" >/dev/null && echo "heartbeat sent"; fi
+    secrets: [backup-blob-container-url, backup-blob-sas, heartbeats-backup]
+    volumes: [backup-dump:/dump:ro]
+    read_only: true
+    security_opt: [no-new-privileges:true]   # 이미지 사용자 curl_user(uid 100)로 돈다
+    mem_limit: 128m   # 🟡 k8s와 같다. --data-binary는 덤프를 통째로 메모리에 올린다
+
+volumes:
+  postgres:
+  backup-dump:   # 마지막 덤프 하나만 남는다 (다음 dump가 지운다). k8s emptyDir은 작업이 끝나면 사라졌다
+
+# 비밀값 파일 9개. 이름 = Key Vault 비밀 이름 = k8s Secret <이름>-<키> (_ 는 -, 키가 이름 끝말과 같으면 한 번만)
+# 모두 있어야 한다. 선택(†)은 빈 파일이면 그 기능만 꺼진다 (k8s optional: true)
+secrets:
+  db-url: {file: /etc/banjjak/secrets/db-url}                  # db / url. 지금 k8s 값 그대로 (호스트 이름 postgres가 서비스 이름과 같다)
+  db-password: {file: /etc/banjjak/secrets/db-password}        # db / password
+  github-token: {file: /etc/banjjak/secrets/github-token}      # github-token / token
+  anthropic-api-key: {file: /etc/banjjak/secrets/anthropic-api-key}        # † 비면 코드판 카드만
+  heartbeats-collector: {file: /etc/banjjak/secrets/heartbeats-collector}  # † Better Stack 하트비트 주소
+  heartbeats-analyzer: {file: /etc/banjjak/secrets/heartbeats-analyzer}    # †
+  heartbeats-backup: {file: /etc/banjjak/secrets/heartbeats-backup}        # †
+  backup-blob-container-url: {file: /etc/banjjak/secrets/backup-blob-container-url}  # † 비면 백업 올리기를 건너뛴다
+  backup-blob-sas: {file: /etc/banjjak/secrets/backup-blob-sas}            # †

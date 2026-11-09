@@ -1,0 +1,15 @@
+# collector · analyzer · rising을 한 번 돌린다 (k8s CronJob의 Job 하나). 일정은 banjjak-<작업>.timer
+# 겹치지 않는다: 아직 돌고 있으면 timer가 새로 띄우지 않는다 (k8s concurrencyPolicy: Forbid)
+# 시간 제한은 컨테이너 안의 timeout 600 (compose.yaml). TimeoutStartSec는 docker 자체가 멈췄을 때의 안전판
+# ponytail: 실패해도 다시 하지 않는다 (k8s backoffLimit 1은 옮기지 않음). 다음 시각에 다시 돌고, 끊긴 하트비트는 Better Stack이 알린다
+[Unit]
+Description=banjjak %i
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+# 지금 올라가 있는 커밋 (BANJJAK_SHA=...). 배포할 때 CD가 쓴다 (5주차)
+EnvironmentFile=/opt/banjjak/deployed.env
+ExecStart=/usr/bin/docker compose -f /opt/banjjak/compose.yaml run --rm %i
+TimeoutStartSec=20min

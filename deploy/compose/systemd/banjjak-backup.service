@@ -1,0 +1,13 @@
+# DB 백업 한 번: dump가 성공해야 upload로 간다 (ExecStart는 차례로 돌고, 하나가 실패하면 멈춘다)
+# 일정은 banjjak-backup.timer. 겹침 · 안전판은 banjjak-job@.service와 같다
+[Unit]
+Description=banjjak DB backup (pg_dump -> Azure Blob)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/banjjak/deployed.env
+ExecStart=/usr/bin/docker compose -f /opt/banjjak/compose.yaml run --rm backup-dump
+ExecStart=/usr/bin/docker compose -f /opt/banjjak/compose.yaml run --rm backup-upload
+TimeoutStartSec=30min
