@@ -23,7 +23,8 @@ SECTION = 'id="flow-title"'
 
 def seed():
     items = [{"id": n, "full_name": name, "html_url": f"https://github.com/{name}", "description": about, "language": "Go",
-              "topics": [], "stargazers_count": 1000 - n, "created_at": "2026-10-27T12:00:00Z"} for n, (name, about) in enumerate(REPOS, 1)]
+              "topics": [], "stargazers_count": 1000 - n,
+              "created_at": f"2026-10-27T{12 - n:02d}:00:00Z"} for n, (name, about) in enumerate(REPOS, 1)]   # 한 시간씩 벌린다: 같은 때 · 비슷한 별이면 가짜 별 무리로 빠진다
     with db.engine().begin() as conn:
         collect_once(lambda q, p: {"items": items if p == 1 else []}, conn, NOW - timedelta(minutes=20))
 

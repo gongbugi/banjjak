@@ -81,6 +81,22 @@ def test_trending_counts_a_full_day_and_says_how_long_it_watched():
     ]
 
 
+# 2026-11-12 실측: 순위 약 35/50이 11-06 20:48 ~ 21:14 UTC에 만든 별 1,200 ~ 1,300 레포 무리 (해적판 · 악성코드 미끼 이름).
+# 생성 ±10분 · 별 0.8 ~ 1.25배로 세면 정상은 최대 3, 4부터 전부 스팸이었다 → 자기 포함 4개 이상이면 뺀다 (본인 11-12)
+def test_trending_drops_fake_star_clusters():
+    with db.engine().begin() as conn:
+        collect_once(fake_search([[
+            item(1, "s/one", 1200, "2026-10-20T20:50:00Z"), item(2, "s/two", 1250, "2026-10-20T20:53:00Z"),
+            item(3, "s/three", 1300, "2026-10-20T20:56:00Z"), item(4, "s/four", 1150, "2026-10-20T20:59:00Z"),
+            item(5, "n/big", 3000, "2026-10-20T20:55:00Z"),     # 같은 때 생겼지만 별 수가 달라 무리가 아니다
+            item(6, "t/one", 500, "2026-10-19T10:00:00Z"), item(7, "t/two", 520, "2026-10-19T10:05:00Z"),
+            item(8, "t/three", 480, "2026-10-19T10:09:00Z"),   # 닮은 셋은 정상에도 있다
+        ]]), conn, NOW)
+        rows = trending(conn, limit=10)
+
+    assert sorted(r["full_name"] for r in rows) == ["n/big", "t/one", "t/three", "t/two"]
+
+
 # 2026-10-23 00:00 · 01:00 KST: GitHub이 장애 중에 200 + 빈 결과를 줬고, 수집기는 0건을 저장한 채 "성공"으로 끝났다
 # (Job 성공 · 하트비트 정상 · 데이터만 묵음). 빈 결과는 실패로 끝내야 재시도 · 하트비트 끊김 · 운영 AI 진단이 함께 울린다
 def test_empty_search_fails_the_run_instead_of_storing_nothing():
