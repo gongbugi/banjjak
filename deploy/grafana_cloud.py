@@ -39,6 +39,12 @@ def ssh(cmd, value=None):
                           capture_output=True, check=True).stdout.decode()
 
 
+def put_secret(name, value):
+    """값은 SSH 표준 입력으로만 지난다. 새 파일에 다 쓴 뒤 444로 바꿔 옮긴다 (compose의 비루트 사용자가 읽는다)"""
+    f = f"{SECRETS}/{name}"
+    ssh(f"sudo sh -c 'umask 077; cat > {f}.new && chmod 444 {f}.new && mv {f}.new {f}'", value)
+
+
 def vm_secrets():
     token = getpass.getpass("에이전트 토큰 (access policy, metrics:write만. 비우면 VM 단계를 건너뜀): ").strip()
     if not token:
@@ -51,9 +57,7 @@ def vm_secrets():
     if not user.isdigit():
         raise SystemExit("사용자는 숫자 ID다")
     for name, value in (("grafana-cloud-url", url), ("grafana-cloud-user", user), ("grafana-cloud-token", token)):
-        # 값은 SSH 표준 입력으로만 지난다. 새 파일에 다 쓴 뒤 444로 바꿔 옮긴다 (compose의 비루트 사용자가 읽는다)
-        f = f"{SECRETS}/{name}"
-        ssh(f"sudo sh -c 'umask 077; cat > {f}.new && chmod 444 {f}.new && mv {f}.new {f}'", value)
+        put_secret(name, value)
     print(ssh(f"sudo wc -c {SECRETS}/grafana-cloud-url {SECRETS}/grafana-cloud-user {SECRETS}/grafana-cloud-token"), end="")
 
 
