@@ -36,7 +36,9 @@ LLM이 쓴 글은 그대로 화면에 나가지 않는다.
 
 - 운영 AI 계정은 허용 목록의 조치만 할 수 있다 (Kubernetes RBAC · 승인 정책). 코드 검사로 대신하지 않는다
 - 장애 주입기와 정답 기록이 있는 곳은 운영 AI가 읽지도 못한다
-- 조치 뒤에는 경보가 ## 한 달 실험 (2026-10-21 ~ 11-20)
+- 조치 뒤에는 경보가 풀렸는지 다시 보고, 안 풀리면 사람에게 넘긴다
+
+## 한 달 실험 (2026-10-21 ~ 11-20)
 
 장애 주입기가 무작위로 장애를 넣고, 운영 AI가 탐지 · 진단 · 조치했다. 끝난 뒤 정답과 판단을 대조했다 ([#12 결과](https://github.com/gongbugi/banjjak/issues/12#issuecomment-7036462954), `deploy/grade.py`).
 
@@ -113,8 +115,6 @@ flowchart LR
 Python 3.13 · FastAPI · Jinja · SQLAlchemy · Alembic · PostgreSQL 18 · Docker Compose · systemd · GitHub Actions · Azure · Grafana Cloud · Claude (Haiku · Sonnet) · Better Stack · Slack
 
 실험 기간: k3s · kustomize · Prometheus · Alertmanager · Grafana
-
-e (Haiku · Sonnet) · Slack
 
 ## 디렉터리
 
