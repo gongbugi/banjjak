@@ -163,14 +163,30 @@ services:
   # 경보 규칙(deploy/ops/rules.yml의 sli) · 대시보드 · Slack 알림은 Grafana Cloud 쪽이다 (deploy/grafana_cloud.py로 올린다).
   # 에이전트 · VM이 멈추면 지표가 끊겨 Grafana Cloud의 DataAgeMissing이 운다. Grafana Cloud 자체는 Better Stack이 밖에서 본다
   # 주소 · 사용자 · 토큰은 비밀 파일 (토큰은 metrics:write만). 주소 · 사용자는 시작할 때 설정 파일에 끼운다
+  # 설정은 환경 변수로 넘긴다: compose의 인라인 configs(content:)는 read_only 서비스에 못 쓴다 (11-20 배포 실패 · 되돌림)
   agent:
     image: prom/prometheus:v3.13.4
     entrypoint: [sh, -c]
     command:
       - |
-        sed -e "s|@URL@|$$(cat /run/secrets/grafana-cloud-url)|" -e "s|@USER@|$$(cat /run/secrets/grafana-cloud-user)|" /etc/agent.yml > /tmp/agent.yml
+        printf '%s\n' "$$AGENT_YML" | sed -e "s|@URL@|$$(cat /run/secrets/grafana-cloud-url)|" -e "s|@USER@|$$(cat /run/secrets/grafana-cloud-user)|" > /tmp/agent.yml
         exec /bin/prometheus --agent --config.file=/tmp/agent.yml --storage.agent.path=/prometheus
-    configs: [{source: agent, target: /etc/agent.yml}]
+    environment:
+      # 무료 한도(활성 시계열 1만)를 아끼려고 에이전트 자신의 지표는 보내기 상태만 남긴다
+      AGENT_YML: |
+        global:
+          scrape_interval: 15s
+          external_labels: {cluster: app}
+        scrape_configs:
+          - job_name: banjjak
+            static_configs: [{targets: ["web:9100"], labels: {app: web}}]
+          - job_name: agent
+            static_configs: [{targets: ["localhost:9090"]}]
+            metric_relabel_configs:
+              - {source_labels: [__name__], regex: "prometheus_remote_storage_.*", action: keep}
+        remote_write:
+          - url: "@URL@"
+            basic_auth: {username: "@USER@", password_file: /run/secrets/grafana-cloud-token}
     secrets: [grafana-cloud-url, grafana-cloud-user, grafana-cloud-token]
     volumes: [agent:/prometheus]   # 보내기 전 버퍼(WAL). 새 볼륨은 이미지 /prometheus의 소유(nobody)를 물려받는다
     tmpfs: [/tmp]
@@ -179,24 +195,6 @@ services:
     mem_limit: 128m   # 🟡 11-09 측정 RSS 약 80MB
     restart: unless-stopped
     logging: *logging
-
-# 에이전트 설정. 무료 한도(활성 시계열 1만)를 아끼려고 에이전트 자신의 지표는 보내기 상태만 남긴다
-configs:
-  agent:
-    content: |
-      global:
-        scrape_interval: 15s
-        external_labels: {cluster: app}
-      scrape_configs:
-        - job_name: banjjak
-          static_configs: [{targets: ["web:9100"], labels: {app: web}}]
-        - job_name: agent
-          static_configs: [{targets: ["localhost:9090"]}]
-          metric_relabel_configs:
-            - {source_labels: [__name__], regex: "prometheus_remote_storage_.*", action: keep}
-      remote_write:
-        - url: "@URL@"
-          basic_auth: {username: "@USER@", password_file: /run/secrets/grafana-cloud-token}
 
 volumes:
   postgres:

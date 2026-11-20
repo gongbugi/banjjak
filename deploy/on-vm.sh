@@ -30,7 +30,7 @@ ready() {   # up이 끝나면 web은 새 컨테이너다 (migrate가 성공해�
   done
 }
 if ! ready "$sha"; then
-  echo "새 web이 준비 안 됨 → ${old:-?}로 되돌린다"
+  echo "새 버전이 안 뜸 (compose up 실패 또는 web 준비 안 됨) → ${old:-?}로 되돌린다"
   install -m 644 "$dir/compose.yaml.old" "$opt/compose.yaml"
   [ -n "$old" ] && ready "$old" && echo "되돌림 ok" || echo "되돌림도 실패"
   exit 1
