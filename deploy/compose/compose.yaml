@@ -2,11 +2,11 @@
 # deploy/k8s/의 app · postgres · collector · analyzer · rising · backup을 옮겼다.
 # 운영 VM 것(장애 주입기 · 운영 AI · Prometheus · Alertmanager)과 Grafana는 넣지 않는다 (운영 VM은 11-20에 지운다)
 #
-# 올리기 (VM에서. CD를 compose용으로 바꾸는 것은 5주차):
+# 올리기: CD가 deploy/on-vm.sh로 (main 푸시 → 승인). 손으로는 VM에서:
 #   BANJJAK_SHA=<커밋 SHA> docker compose -f /opt/banjjak/compose.yaml up -d --wait
 # 비밀값: /etc/banjjak/secrets/<이름> 파일 하나에 값 하나 (git · 이미지 밖). 이름은 맨 아래 secrets: 목록
 #   폴더는 root 소유 · 권한 700, 파일은 444. compose(swarm 아님)는 붙인 파일의 uid · 권한을 못 바꿔서,
-#   컨테이너의 비루트 사용자가 읽으려면 파일이 444여야 한다. 호스트의 다른 사용자는 700 폴더에 막힌다 🟡 5주차에 실제로 확인
+#   컨테이너의 비루트 사용자가 읽으려면 파일이 444여야 한다. 호스트의 다른 사용자는 700 폴더에 막힌다 (11-20 VM에서 uid 10001이 9개 다 읽음)
 #   서비스마다 필요한 파일만 /run/secrets/<이름>으로 붙고, 값은 환경 변수에 없다 (앱은 *_FILE을 읽는다: banjjak.secret)
 #   Key Vault로 옮길 때: 이 폴더에 tmpfs를 올리고 부팅 때 Key Vault 비밀을 같은 이름 파일로 쓴다. compose는 그대로
 # 작업(collector · analyzer · rising · backup)은 profiles: [job]이라 up에서 뜨지 않는다.

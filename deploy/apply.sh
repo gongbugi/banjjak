@@ -2,8 +2,8 @@
 # 사용: deploy/apply.sh <kubectl 컨텍스트> [이미지 태그=현재 커밋 SHA]
 #       로컬 k3d 시험: IMAGE=banjjak deploy/apply.sh k3d-banjjak local  (k3d image import로 넣은 이미지)
 # deploy/clusters/<컨텍스트>(없으면 deploy/k8s)를 쓰고 이미지 태그만 고정한 임시 오버레이로 적용한다.
-# 앱 VM(azure-banjjak) · 운영 VM(azure-banjjak-ops) · 로컬(k3d-banjjak) 모두 이것으로 올린다.
-# 평소 배포는 CD가 VM 안에서 이 스크립트를 돌린다 (.github/workflows/deploy.yml → deploy/on-vm.sh). 손으로는 로컬 시험과 비상시에 쓴다
+# 이제 로컬 k3d(k3d-banjjak) 시험용이다. 11-20까지는 Azure 두 VM의 k3s에도 이것으로 올렸다.
+# 11-20부터 앱 VM은 compose라 CD는 이것을 쓰지 않는다 (.github/workflows/deploy.yml → deploy/on-vm.sh)
 set -euo pipefail
 ctx=${1:?kubectl context}
 tag=${2:-$(git rev-parse HEAD)}

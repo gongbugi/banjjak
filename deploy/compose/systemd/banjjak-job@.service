@@ -9,7 +9,7 @@ After=docker.service
 
 [Service]
 Type=oneshot
-# 지금 올라가 있는 커밋 (BANJJAK_SHA=...). 배포할 때 CD가 쓴다 (5주차)
+# 지금 올라가 있는 커밋 (BANJJAK_SHA=...). 배포가 성공하면 CD가 쓴다 (deploy/on-vm.sh)
 EnvironmentFile=/opt/banjjak/deployed.env
 ExecStart=/usr/bin/docker compose -f /opt/banjjak/compose.yaml run --rm %i
 TimeoutStartSec=20min
