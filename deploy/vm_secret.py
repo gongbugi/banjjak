@@ -2,6 +2,7 @@
 
 사용 (레포 루트, PowerShell): app\\.venv\\Scripts\\python deploy\\vm_secret.py cloudflare-tunnel-token
 - 이름은 deploy/compose/compose.yaml의 secrets: 에 있는 것만. 값은 getpass라 화면 · 명령 인자 · 로그에 안 남는다
+- VM에는 Azure run-command로 간다 (공인 IP · SSH 없이, az login이 돼 있어야 한다). 1 ~ 2분 걸린다
 - 이미 떠 있는 컨테이너는 옛 파일을 계속 본다. 바꾼 뒤 그 서비스를 다시 만든다 (up -d --force-recreate <서비스>)
 """
 import getpass
@@ -9,7 +10,7 @@ import os
 import re
 import sys
 
-from grafana_cloud import HERE, SECRETS, put_secret, ssh
+from grafana_cloud import HERE, put_secret
 
 names = re.findall(r"^  ([a-z0-9-]+): \{file: ", open(os.path.join(HERE, "compose", "compose.yaml"), encoding="utf-8").read(), re.M)
 name = sys.argv[1] if len(sys.argv) == 2 else ""
@@ -19,4 +20,3 @@ value = getpass.getpass(f"{name} 값 (화면에 안 찍힘): ").strip()
 if not value:
     raise SystemExit("빈 값이라 그만둔다")
 put_secret(name, value)
-print(ssh(f"sudo wc -c {SECRETS}/{name}"), end="")

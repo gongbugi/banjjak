@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/gongbugi/banjjak/actions/workflows/ci.yml/badge.svg)](https://github.com/gongbugi/banjjak/actions/workflows/ci.yml)
 
-**지금 뜨는 GitHub 레포를 AI가 쉽고 빠르게 정리하고, AI가 함께 운영하는 서비스.**
+**지금 뜨는 GitHub 레포를 AI가 쉽고 빠르게 정리하고, AI가 함께 운영하는 서비스.** → https://banjjak.gongbugi.com
 
 GitHub Trending은 "왜 뜨는지", "나한테 필요한지"를 알려 주지 않는다. banjjak은 매시간 별 증가로 순위를 직접 매기고, 레포마다 무엇을 하는지 한 장으로 정리하고, 비슷한 레포가 함께 뜨는 흐름을 묶어 보여 준다.
 
@@ -62,15 +62,17 @@ flowchart LR
     col --> pg[(Postgres)]
     ana[분석기<br/>코드판 · 카드 AI · 흐름] --> pg
     pg --> web[웹<br/>FastAPI · Jinja]
+    web --- tun[터널<br/>cloudflared]
   end
-  web --> user((사용자))
+  tun -. VM에서 밖으로만 .-> cf[Cloudflare<br/>HTTPS] --> user((사용자))
   web -. 지표 · 에이전트 .-> gc[Grafana Cloud<br/>SLI 경보 → Slack]
-  bs[Better Stack] -. 웹 확인 · 하트비트 .-> vm
+  bs[Better Stack] -. 웹 확인 · 하트비트 .-> cf
 ```
 
 - 서버: Azure VM 1대 (Korea Central, 메모리 1GB), Docker Compose. 매시 작업은 systemd timer가 부른다 (`deploy/compose/`)
-- 배포: main 푸시 → 시험 · 이미지 빌드 → GitHub에서 승인 한 번 → VM 안에서 compose로 (GitHub OIDC, 저장된 키 없음). 새 웹이 준비 안 되면 앞 커밋으로 되돌린다
-- 비밀값은 실행할 때 VM의 파일로만 붙인다. 이미지와 레포에는 없다
+- 입구: Cloudflare Tunnel. VM이 Cloudflare로 밖으로만 연결하고, HTTPS는 Cloudflare가 맡는다. VM에는 공인 IP도 들어오는 포트도 없다
+- 배포: main 푸시 → 시험 · 이미지 빌드 → GitHub에서 승인 한 번 → VM 안에서 compose로 (GitHub OIDC, 저장된 키 없음, Azure run-command). 새 웹이 준비 안 되면 앞 커밋으로 되돌린다
+- 비밀값은 실행할 때 VM의 파일로만 붙인다. 이미지와 레포에는 없다 (넣을 때는 `deploy/vm_secret.py`, 역시 run-command)
 - 지표 · 경보: VM의 Prometheus 에이전트가 Grafana Cloud(무료)로 보내고, SLI 경보는 Grafana가 Slack으로 보낸다. 규칙의 원본은 `deploy/ops/rules.yml` (`deploy/grafana_cloud.py`로 올린다)
 - 바깥 감시: Better Stack (웹 모니터 · 작업 하트비트)
 
@@ -112,7 +114,7 @@ flowchart LR
 
 ## 기술
 
-Python 3.13 · FastAPI · Jinja · SQLAlchemy · Alembic · PostgreSQL 18 · Docker Compose · systemd · GitHub Actions · Azure · Grafana Cloud · Claude (Haiku · Sonnet) · Better Stack · Slack
+Python 3.13 · FastAPI · Jinja · SQLAlchemy · Alembic · PostgreSQL 18 · Docker Compose · systemd · GitHub Actions · Azure · Cloudflare Tunnel · Grafana Cloud · Claude (Haiku · Sonnet) · Better Stack · Slack
 
 실험 기간: k3s · kustomize · Prometheus · Alertmanager · Grafana
 

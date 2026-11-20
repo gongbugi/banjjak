@@ -70,7 +70,7 @@ services:
     environment:
       DATABASE_URL_FILE: /run/secrets/db-url
     secrets: [db-url]
-    ports: ["80:8000"]   # 9100(지표)은 호스트에 열지 않는다
+    ports: ["127.0.0.1:80:8000"]   # VM 안 준비 확인(on-vm.sh)용. 밖에서는 tunnel로만 들어온다 (공인 IP 없음, 11-20). 9100(지표)은 호스트에 열지 않는다
     depends_on:
       migrate: {condition: service_completed_successfully}
     healthcheck:   # k8s readinessProbe (/readyz가 DB까지 본다). `up --wait`가 이것을 기다린다. 이미지에 curl이 없어 파이썬으로

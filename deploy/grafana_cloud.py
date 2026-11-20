@@ -3,7 +3,7 @@
 사용 (레포 루트, PowerShell): app\\.venv\\Scripts\\python deploy\\grafana_cloud.py
 - 값은 물어서 받는다. 토큰 · 웹훅은 getpass라 화면에 안 찍히고, 명령 인자 · 파일 · 로그에 남지 않는다
 - 빈칸으로 엔터를 치면 그 단계를 건너뛴다 (규칙만 다시 올릴 때: 에이전트 토큰을 비운다)
-1. 앱 VM: /etc/banjjak/secrets/grafana-cloud-{url,user,token} (SSH 표준 입력으로, 444). compose의 agent가 읽는다
+1. 앱 VM: /etc/banjjak/secrets/grafana-cloud-{url,user,token} (Azure run-command로, 444). compose의 agent가 읽는다 (az login이 돼 있어야 한다)
 2. Grafana (서비스 계정 토큰): Slack 연락처 · 경보 규칙 · 대시보드
    경보 규칙은 deploy/ops/rules.yml의 sli 그룹을 Grafana 규칙 가져오기 API에 YAML 그대로 보낸다 (규칙의 원본은 rules.yml 하나).
    새 무료 계정에는 Grafana Cloud Alertmanager가 없어 (Grafana 상태 페이지 2026-04) 경보는 Grafana 자체 경보로 돈다.
@@ -13,13 +13,15 @@ import getpass
 import json
 import os
 import re
+import shutil
 import subprocess
+import time
 import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-VM = "azureuser@20.41.96.42"
-KEY = os.path.expanduser("~/.ssh/banjjak_azure_ed25519")   # infra/azure/create.ps1이 만든 키 (SSH는 운영자 IP에만 열려 있다)
+ARM = "https://management.azure.com"
+VM = "/resourceGroups/rg-banjjak/providers/Microsoft.Compute/virtualMachines/banjjak-vm"
 SECRETS = "/etc/banjjak/secrets"
 FOLDER = "banjjak"         # 규칙 가져오기에서 namespace = Grafana 폴더 이름
 CONTACT = "banjjak-slack"
@@ -34,15 +36,33 @@ def sli_group(text):
     return "name: sli\n" + "\n".join(lines).rstrip() + "\n"
 
 
-def ssh(cmd, value=None):
-    return subprocess.run(["ssh", "-i", KEY, "-o", "BatchMode=yes", VM, cmd], input=value and value.encode(),
-                          capture_output=True, check=True).stdout.decode()
+def vm_run(script, protected=None):
+    """앱 VM에서 sh 스크립트를 root로 돌리고 출력을 돌려준다. Azure 관리형 run-command라 공인 IP · SSH가 없어도 된다 (11-20 IP 빼기).
+    protected의 값은 스크립트의 환경 변수로만 간다 (명령 인자 · 파일 · 출력에 안 남는다). 끝나면 run-command 자원을 지운다"""
+    out = subprocess.run([shutil.which("az"), "account", "get-access-token", "--query", "[subscription,accessToken]", "-o", "tsv"],
+                         capture_output=True, check=True, text=True).stdout.split()
+    sub, token = out[0], out[1]
+    path = f"/subscriptions/{sub}{VM}/runCommands/banjjak-{os.getpid()}?api-version=2026-04-01"
+    api(ARM, token, "PUT", path, {"location": "koreacentral", "properties": {
+        "source": {"script": script}, "timeoutInSeconds": 300,
+        "protectedParameters": [{"name": k, "value": v} for k, v in (protected or {}).items()]}})
+    try:
+        for _ in range(120):
+            view = api(ARM, token, "GET", path + "&$expand=instanceView")["properties"].get("instanceView") or {}
+            if view.get("executionState") in ("Succeeded", "Failed", "TimedOut", "Canceled"):
+                break
+            time.sleep(5)
+    finally:
+        api(ARM, token, "DELETE", path)
+    if view.get("executionState") != "Succeeded" or view.get("exitCode"):
+        raise SystemExit(f"VM 스크립트 실패: {view.get('executionState')} exit {view.get('exitCode')} {(view.get('error') or '')[:300]}")
+    return view.get("output") or ""
 
 
 def put_secret(name, value):
-    """값은 SSH 표준 입력으로만 지난다. 새 파일에 다 쓴 뒤 444로 바꿔 옮긴다 (compose의 비루트 사용자가 읽는다)"""
+    """새 파일에 다 쓴 뒤 444로 바꿔 옮긴다 (compose의 비루트 사용자가 읽는다). 크기만 찍는다"""
     f = f"{SECRETS}/{name}"
-    ssh(f"sudo sh -c 'umask 077; cat > {f}.new && chmod 444 {f}.new && mv {f}.new {f}'", value)
+    print(vm_run(f"umask 077; printf '%s' \"$V\" > {f}.new && chmod 444 {f}.new && mv {f}.new {f} && wc -c {f}", {"V": value}), end="")
 
 
 def vm_secrets():
@@ -58,7 +78,6 @@ def vm_secrets():
         raise SystemExit("사용자는 숫자 ID다")
     for name, value in (("grafana-cloud-url", url), ("grafana-cloud-user", user), ("grafana-cloud-token", token)):
         put_secret(name, value)
-    print(ssh(f"sudo wc -c {SECRETS}/grafana-cloud-url {SECRETS}/grafana-cloud-user {SECRETS}/grafana-cloud-token"), end="")
 
 
 def api(base, token, method, path, body=None, headers=None, ctype="application/json"):

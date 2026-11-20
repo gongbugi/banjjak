@@ -2,7 +2,7 @@
 
 사람이 거의 없어도 웹 SLI(5xx 비율 · p95)가 잡히게 한다 (2026-10-22 실측: 5분 창의 77%가 사용자 요청 0건).
 웹은 이 User-Agent로 합성(source="probe")과 실제(source="user")를 나눠 센다. 성공 · 실패는 웹 쪽 지표가 센다.
-실행: PROBE_URL=http://20.41.96.42 python -m banjjak.probe
+실행: PROBE_URL=https://banjjak.gongbugi.com python -m banjjak.probe (실험 기간에는 앱 VM 공인 IP)
 """
 import itertools
 import os
