@@ -62,12 +62,14 @@ flowchart LR
     pg --> web[웹<br/>FastAPI · Jinja]
   end
   web --> user((사용자))
+  web -. 지표 · 에이전트 .-> gc[Grafana Cloud<br/>SLI 경보 → Slack]
   bs[Better Stack] -. 웹 확인 · 하트비트 .-> vm
 ```
 
 - 서버: Azure VM 1대 (Korea Central, 메모리 1GB), Docker Compose. 매시 작업은 systemd timer가 부른다 (`deploy/compose/`)
 - 배포: main 푸시 → 시험 · 이미지 빌드 → GitHub에서 승인 한 번 → VM 안에서 compose로 (GitHub OIDC, 저장된 키 없음). 새 웹이 준비 안 되면 앞 커밋으로 되돌린다
 - 비밀값은 실행할 때 VM의 파일로만 붙인다. 이미지와 레포에는 없다
+- 지표 · 경보: VM의 Prometheus 에이전트가 Grafana Cloud(무료)로 보내고, SLI 경보는 Grafana가 Slack으로 보낸다. 규칙의 원본은 `deploy/ops/rules.yml` (`deploy/grafana_cloud.py`로 올린다)
 - 바깥 감시: Better Stack (웹 모니터 · 작업 하트비트)
 
 <details><summary>실험 기간 구조 (VM 2대 · k3s)</summary>
@@ -104,13 +106,13 @@ flowchart LR
 | 데이터 신선도 | 2시간 |
 | 분석 성공률 | 95% |
 
-실험 동안은 Prometheus로 쟀다. 지금은 Better Stack이 밖에서 가용성(`/healthz`) · 신선도(`/freshness`)를 본다.
+실험 동안은 운영 VM의 Prometheus로 쟀다. 지금은 Grafana Cloud가 같은 규칙으로 재고, Better Stack이 밖에서 가용성(`/healthz`) · 신선도(`/freshness`)를 따로 본다.
 
 ## 기술
 
-Python 3.13 · FastAPI · Jinja · SQLAlchemy · Alembic · PostgreSQL 18 · Docker Compose · systemd · GitHub Actions · Azure · Claude (Haiku · Sonnet) · Better Stack
+Python 3.13 · FastAPI · Jinja · SQLAlchemy · Alembic · PostgreSQL 18 · Docker Compose · systemd · GitHub Actions · Azure · Grafana Cloud · Claude (Haiku · Sonnet) · Better Stack · Slack
 
-실험 기간: k3s · kustomize · Prometheus · Alertmanager · Grafana · Slack
+실험 기간: k3s · kustomize · Prometheus · Alertmanager · Grafana
 
 e (Haiku · Sonnet) · Slack
 

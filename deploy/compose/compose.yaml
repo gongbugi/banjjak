@@ -159,11 +159,51 @@ services:
     security_opt: [no-new-privileges:true]   # 이미지 사용자 curl_user(uid 100)로 돈다
     mem_limit: 128m   # 🟡 k8s와 같다. --data-binary는 덤프를 통째로 메모리에 올린다
 
+  # 지표 에이전트 (11-20부터): web의 9100을 15초마다 긁어 Grafana Cloud로 보내기만 한다 (Prometheus 에이전트 모드, 저장 없음).
+  # 경보 규칙(deploy/ops/rules.yml의 sli) · 대시보드 · Slack 알림은 Grafana Cloud 쪽이다 (deploy/grafana_cloud.py로 올린다).
+  # 에이전트 · VM이 멈추면 지표가 끊겨 Grafana Cloud의 DataAgeMissing이 운다. Grafana Cloud 자체는 Better Stack이 밖에서 본다
+  # 주소 · 사용자 · 토큰은 비밀 파일 (토큰은 metrics:write만). 주소 · 사용자는 시작할 때 설정 파일에 끼운다
+  agent:
+    image: prom/prometheus:v3.13.4
+    entrypoint: [sh, -c]
+    command:
+      - |
+        sed -e "s|@URL@|$$(cat /run/secrets/grafana-cloud-url)|" -e "s|@USER@|$$(cat /run/secrets/grafana-cloud-user)|" /etc/agent.yml > /tmp/agent.yml
+        exec /bin/prometheus --agent --config.file=/tmp/agent.yml --storage.agent.path=/prometheus
+    configs: [{source: agent, target: /etc/agent.yml}]
+    secrets: [grafana-cloud-url, grafana-cloud-user, grafana-cloud-token]
+    volumes: [agent:/prometheus]   # 보내기 전 버퍼(WAL). 새 볼륨은 이미지 /prometheus의 소유(nobody)를 물려받는다
+    tmpfs: [/tmp]
+    read_only: true
+    security_opt: [no-new-privileges:true]   # 이미지 사용자 nobody로 돈다
+    mem_limit: 128m   # 🟡 11-09 측정 RSS 약 80MB
+    restart: unless-stopped
+    logging: *logging
+
+# 에이전트 설정. 무료 한도(활성 시계열 1만)를 아끼려고 에이전트 자신의 지표는 보내기 상태만 남긴다
+configs:
+  agent:
+    content: |
+      global:
+        scrape_interval: 15s
+        external_labels: {cluster: app}
+      scrape_configs:
+        - job_name: banjjak
+          static_configs: [{targets: ["web:9100"], labels: {app: web}}]
+        - job_name: agent
+          static_configs: [{targets: ["localhost:9090"]}]
+          metric_relabel_configs:
+            - {source_labels: [__name__], regex: "prometheus_remote_storage_.*", action: keep}
+      remote_write:
+        - url: "@URL@"
+          basic_auth: {username: "@USER@", password_file: /run/secrets/grafana-cloud-token}
+
 volumes:
   postgres:
+  agent:
   backup-dump:   # 마지막 덤프 하나만 남는다 (다음 dump가 지운다). k8s emptyDir은 작업이 끝나면 사라졌다
 
-# 비밀값 파일 9개. 이름 = Key Vault 비밀 이름 = k8s Secret <이름>-<키> (_ 는 -, 키가 이름 끝말과 같으면 한 번만)
+# 비밀값 파일 12개. 이름 = Key Vault 비밀 이름 = k8s Secret <이름>-<키> (_ 는 -, 키가 이름 끝말과 같으면 한 번만)
 # 모두 있어야 한다. 선택(†)은 빈 파일이면 그 기능만 꺼진다 (k8s optional: true)
 secrets:
   db-url: {file: /etc/banjjak/secrets/db-url}                  # db / url. 지금 k8s 값 그대로 (호스트 이름 postgres가 서비스 이름과 같다)
@@ -175,3 +215,6 @@ secrets:
   heartbeats-backup: {file: /etc/banjjak/secrets/heartbeats-backup}        # †
   backup-blob-container-url: {file: /etc/banjjak/secrets/backup-blob-container-url}  # † 비면 백업 올리기를 건너뛴다
   backup-blob-sas: {file: /etc/banjjak/secrets/backup-blob-sas}            # †
+  grafana-cloud-url: {file: /etc/banjjak/secrets/grafana-cloud-url}        # 에이전트: Prometheus remote_write 주소
+  grafana-cloud-user: {file: /etc/banjjak/secrets/grafana-cloud-user}      # 에이전트: 그 사용자 (숫자 ID)
+  grafana-cloud-token: {file: /etc/banjjak/secrets/grafana-cloud-token}    # 에이전트: access policy 토큰 (metrics:write만)
