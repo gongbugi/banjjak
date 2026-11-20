@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "banjjak 실험 기간 구조 (10-21 ~ 11-20)",
+    "locale": "ko",
+    "output": ".archify/experiment.html",
+    "quality_profile": "showcase",
+    "legend": { "mode": "hidden" }
+  },
+  "components": [
+    { "id": "user", "type": "external", "label": "사용자", "sublabel": "브라우저", "pos": [40, 40], "size": [170, 64] },
+    { "id": "github", "type": "external", "label": "GitHub API", "sublabel": "공식 REST API", "pos": [520, 40], "size": [170, 64] },
+    { "id": "web", "type": "frontend", "label": "웹", "sublabel": "FastAPI · Jinja", "pos": [40, 170], "size": [170, 64] },
+    { "id": "postgres", "type": "database", "label": "PostgreSQL 18", "sublabel": "별 기록 · 카드 · 흐름", "pos": [280, 170], "size": [170, 64] },
+    { "id": "collector", "type": "backend", "label": "수집기", "sublabel": "매시간 · CronJob", "pos": [520, 170], "size": [170, 64] },
+    { "id": "analyzer", "type": "backend", "label": "분석기", "sublabel": "코드판 · 카드 AI · 흐름", "pos": [280, 300], "size": [170, 64] },
+    { "id": "k3sapi", "type": "security", "label": "k3s API", "sublabel": "RBAC 허용 목록", "pos": [520, 300], "size": [170, 64] },
+    { "id": "prometheus", "type": "backend", "label": "Prometheus", "sublabel": "SLI 규칙", "pos": [40, 450], "size": [170, 64] },
+    { "id": "alertmanager", "type": "messagebus", "label": "Alertmanager", "sublabel": "경보 묶기", "pos": [280, 450], "size": [170, 64] },
+    { "id": "opsai", "type": "backend", "label": "운영 AI", "sublabel": "점검표 + LLM (Sonnet)", "pos": [520, 450], "size": [170, 64] },
+    { "id": "chaos", "type": "security", "label": "장애 주입기", "sublabel": "정답은 운영 AI가 못 봄", "pos": [760, 450], "size": [170, 64] },
+    { "id": "slack", "type": "external", "label": "Slack", "sublabel": "보고 · 승인 버튼", "pos": [520, 600], "size": [170, 64] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "앱 VM · k3s", "wraps": ["web", "postgres", "collector", "analyzer", "k3sapi"], "pad": 20 },
+    { "kind": "region", "label": "운영 VM · k3s", "wraps": ["prometheus", "alertmanager", "opsai", "chaos"], "pad": 20 }
+  ],
+  "connections": [
+    { "from": "user", "to": "web", "label": "공인 IP · Traefik", "variant": "emphasis" },
+    { "from": "github", "to": "collector", "label": "별 수 · 매시간" },
+    { "from": "web", "to": "postgres", "label": "SQL" },
+    { "from": "collector", "to": "postgres", "label": "저장" },
+    { "from": "analyzer", "to": "postgres", "label": "읽고 씀" },
+    { "from": "web", "to": "prometheus", "label": "지표", "variant": "dashed" },
+    { "from": "prometheus", "to": "alertmanager", "label": "경보", "variant": "dashed" },
+    { "from": "alertmanager", "to": "opsai", "label": "웹훅", "variant": "dashed" },
+    { "from": "opsai", "to": "k3sapi", "label": "허용된 조치", "variant": "security" },
+    { "from": "chaos", "to": "k3sapi", "label": "장애", "variant": "security" },
+    { "from": "opsai", "to": "slack", "label": "보고 · 승인" }
+  ]
+}

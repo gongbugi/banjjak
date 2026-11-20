@@ -55,19 +55,12 @@ LLM이 쓴 글은 그대로 화면에 나가지 않는다.
 
 ## 구조
 
-```mermaid
-flowchart LR
-  gh[GitHub API] --> col[수집기<br/>매시간]
-  subgraph vm[앱 VM · Docker Compose]
-    col --> pg[(Postgres)]
-    ana[분석기<br/>코드판 · 카드 AI · 흐름] --> pg
-    pg --> web[웹<br/>FastAPI · Jinja]
-    web --- tun[터널<br/>cloudflared]
-  end
-  tun -. VM에서 밖으로만 .-> cf[Cloudflare<br/>HTTPS] --> user((사용자))
-  web -. 지표 · 에이전트 .-> gc[Grafana Cloud<br/>SLI 경보 → Slack]
-  bs[Better Stack] -. 웹 확인 · 하트비트 .-> cf
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.png">
+  <img src="docs/img/architecture-light.png" alt="banjjak 구조: 사용자 → Cloudflare → 터널(cloudflared) → 웹 → PostgreSQL. 수집기가 GitHub API에서 매시간 별 수를 받아 저장하고, 분석기가 Claude API로 카드와 흐름을 만든다. 에이전트가 지표를 Grafana Cloud로 보내고 경보는 Slack으로 간다. Better Stack이 밖에서 웹을 확인한다">
+</picture>
+
+<sub>그림 원본: <code>docs/img/architecture.archify.json</code> (<a href="https://github.com/tt-a1i/archify">archify</a>)</sub>
 
 - 서버: Azure VM 1대 (Korea Central, 메모리 1GB), Docker Compose. 매시 작업은 systemd timer가 부른다 (`deploy/compose/`)
 - 입구: Cloudflare Tunnel. VM이 Cloudflare로 밖으로만 연결하고, HTTPS는 Cloudflare가 맡는다. VM에는 공인 IP도 들어오는 포트도 없다
@@ -78,24 +71,10 @@ flowchart LR
 
 <details><summary>실험 기간 구조 (VM 2대 · k3s)</summary>
 
-```mermaid
-flowchart LR
-  gh[GitHub API] --> col[수집기<br/>매시간]
-  subgraph app[앱 VM · k3s]
-    col --> pg[(Postgres)]
-    ana[분석기<br/>코드판 · 카드 AI · 흐름] --> pg
-    pg --> web[웹<br/>FastAPI · Jinja]
-  end
-  web --> user((사용자))
-  subgraph ops[운영 VM · k3s]
-    prom[Prometheus] --> am[Alertmanager] --> ai[운영 AI<br/>점검표 + LLM]
-    chaos[장애 주입기]
-  end
-  app -- 지표 --> prom
-  ai -- 허용된 조치 --> app
-  chaos -- 장애 --> app
-  ai <--> slack[Slack<br/>보고 · 승인]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/experiment-dark.png">
+  <img src="docs/img/experiment-light.png" alt="실험 기간 구조: 앱 VM(k3s)에 웹 · PostgreSQL · 수집기 · 분석기. 운영 VM(k3s)의 Prometheus → Alertmanager → 운영 AI가 앱 VM의 k3s API에 허용된 조치만 하고 Slack으로 보고 · 승인을 받는다. 장애 주입기도 같은 k3s API로 장애를 넣는다">
+</picture>
 
 앱과 운영을 나눠 운영 AI가 앱과 같이 죽지 않게 했다. 실험이 끝난 11-20에 운영 VM을 지우고, 앱 VM을 1GB · compose로 줄였다 (`deploy/compose/from-k3s.sh`).
 
@@ -114,9 +93,14 @@ flowchart LR
 
 ## 기술
 
-Python 3.13 · FastAPI · Jinja · SQLAlchemy · Alembic · PostgreSQL 18 · Docker Compose · systemd · GitHub Actions · Azure · Cloudflare Tunnel · Grafana Cloud · Claude (Haiku · Sonnet) · Better Stack · Slack
-
-실험 기간: k3s · kustomize · Prometheus · Alertmanager · Grafana
+| | |
+|---|---|
+| **앱** | ![Python](https://img.shields.io/badge/Python_3.13-3776AB?logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white) ![Jinja](https://img.shields.io/badge/Jinja-B41717?logo=jinja&logoColor=white) ![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-D71F00?logo=sqlalchemy&logoColor=white) ![Alembic](https://img.shields.io/badge/Alembic-555555) |
+| **데이터** | ![PostgreSQL](https://img.shields.io/badge/PostgreSQL_18-4169E1?logo=postgresql&logoColor=white) |
+| **AI** | ![Claude](https://img.shields.io/badge/Claude_Haiku_%C2%B7_Sonnet-D97757?logo=claude&logoColor=white) |
+| **배포 · 운영** | ![Docker Compose](https://img.shields.io/badge/Docker_Compose-2496ED?logo=docker&logoColor=white) ![systemd](https://img.shields.io/badge/systemd-555555) ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?logo=githubactions&logoColor=white) ![Azure](https://img.shields.io/badge/Azure-0078D4) ![Cloudflare Tunnel](https://img.shields.io/badge/Cloudflare_Tunnel-F38020?logo=cloudflare&logoColor=white) |
+| **관측 · 알림** | ![Grafana Cloud](https://img.shields.io/badge/Grafana_Cloud-F46800?logo=grafana&logoColor=white) ![Better Stack](https://img.shields.io/badge/Better_Stack-000000?logo=betterstack&logoColor=white) ![Slack](https://img.shields.io/badge/Slack-4A154B) |
+| **실험 기간** | ![k3s](https://img.shields.io/badge/k3s-FFC61C?logo=k3s&logoColor=black) ![kustomize](https://img.shields.io/badge/kustomize-555555) ![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?logo=prometheus&logoColor=white) ![Alertmanager](https://img.shields.io/badge/Alertmanager-E6522C?logo=prometheus&logoColor=white) ![Grafana](https://img.shields.io/badge/Grafana-F46800?logo=grafana&logoColor=white) |
 
 ## 디렉터리
 

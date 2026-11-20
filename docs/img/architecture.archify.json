@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "banjjak 구조",
+    "locale": "ko",
+    "output": ".archify/architecture.html",
+    "quality_profile": "showcase",
+    "legend": { "mode": "hidden" }
+  },
+  "components": [
+    { "id": "user", "type": "external", "label": "사용자", "sublabel": "브라우저", "pos": [40, 40], "size": [170, 64] },
+    { "id": "github", "type": "external", "label": "GitHub API", "sublabel": "공식 REST API", "pos": [760, 40], "size": [170, 64] },
+    { "id": "cloudflare", "type": "cloud", "label": "Cloudflare", "sublabel": "HTTPS · banjjak.gongbugi.com", "pos": [40, 170], "size": [170, 64] },
+    { "id": "betterstack", "type": "external", "label": "Better Stack", "sublabel": "웹 확인 · 작업 하트비트", "pos": [280, 170], "size": [170, 64] },
+    { "id": "tunnel", "type": "security", "label": "터널", "sublabel": "cloudflared · 밖으로만", "pos": [40, 300], "size": [170, 64] },
+    { "id": "web", "type": "frontend", "label": "웹", "sublabel": "FastAPI · Jinja", "pos": [280, 300], "size": [170, 64] },
+    { "id": "postgres", "type": "database", "label": "PostgreSQL 18", "sublabel": "별 기록 · 카드 · 흐름", "pos": [520, 300], "size": [170, 64] },
+    { "id": "collector", "type": "backend", "label": "수집기", "sublabel": "매시간 · systemd timer", "pos": [760, 300], "size": [170, 64] },
+    { "id": "agent", "type": "backend", "label": "에이전트", "sublabel": "Prometheus agent", "pos": [280, 430], "size": [170, 64] },
+    { "id": "analyzer", "type": "backend", "label": "분석기", "sublabel": "코드판 · 카드 AI · 흐름", "pos": [520, 430], "size": [170, 64] },
+    { "id": "slack", "type": "external", "label": "Slack", "sublabel": "SLI 경보 받기", "pos": [40, 560], "size": [170, 64] },
+    { "id": "grafana", "type": "cloud", "label": "Grafana Cloud", "sublabel": "SLI 규칙 · 경보", "pos": [280, 560], "size": [170, 64] },
+    { "id": "claude", "type": "external", "label": "Claude API", "sublabel": "Haiku · 비용 상한", "pos": [520, 560], "size": [170, 64] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "앱 VM · Azure Korea Central · Docker Compose", "wraps": ["tunnel", "web", "postgres", "collector", "agent", "analyzer"], "pad": 20 }
+  ],
+  "connections": [
+    { "from": "user", "to": "cloudflare", "label": "HTTPS", "variant": "emphasis" },
+    { "from": "cloudflare", "to": "tunnel", "label": "터널", "variant": "emphasis" },
+    { "from": "tunnel", "to": "web", "label": "http", "variant": "emphasis" },
+    { "from": "web", "to": "postgres", "label": "SQL" },
+    { "from": "github", "to": "collector", "label": "별 수 · 매시간" },
+    { "from": "collector", "to": "postgres", "label": "저장" },
+    { "from": "analyzer", "to": "postgres", "label": "읽고 씀" },
+    { "from": "analyzer", "to": "claude", "label": "카드 · 흐름" },
+    { "from": "agent", "to": "web", "label": "지표 긁기", "variant": "dashed" },
+    { "from": "agent", "to": "grafana", "label": "remote_write", "variant": "dashed" },
+    { "from": "grafana", "to": "slack", "label": "경보", "variant": "dashed" },
+    { "from": "betterstack", "to": "cloudflare", "label": "웹 확인", "variant": "dashed" }
+  ]
+}
