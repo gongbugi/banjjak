@@ -11,7 +11,10 @@
 #   Key Vault로 옮길 때: 이 폴더에 tmpfs를 올리고 부팅 때 Key Vault 비밀을 같은 이름 파일로 쓴다. compose는 그대로
 # 작업(collector · analyzer · rising · backup)은 profiles: [job]이라 up에서 뜨지 않는다.
 #   호스트 systemd timer가 `docker compose run --rm <작업>`으로 부르고, 끝나면 컨테이너가 사라진다 (systemd/)
-# 메모리 상한 🟡: 동시에 뜨는 것(postgres + web + 작업 1개)의 합 640MB가 1GB에서 OS · Docker 몫을 뺀 안에 들게 어림했다. 5주차에 잰다
+# 메모리: 어림(postgres + web + 작업 1개 = 640MB)은 틀렸다. 11-21 잰 값: VM 887MB, 쉴 때 460MB를 쓴다 (컨테이너 약 200 + 호스트 약 260).
+#   swap 없이 분석 작업(카드 AI)이 돌면 코드 페이지를 쫓아냈다 다시 읽는 스래싱이 3 ~ 6분씩 났고, 11-21 03:21 KST엔 9시간 안 풀려 VM을 재시작했다
+#   → VM에 swap 1GB가 있어야 한다 (11-21 넣음): fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+#      + /etc/fstab에 `/swapfile none swap sw 0 0`. 새 VM을 만들면 이것부터
 name: banjjak
 
 x-logging: &logging
